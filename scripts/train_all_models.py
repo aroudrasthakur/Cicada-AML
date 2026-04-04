@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the full ML training pipeline: prepare features → four lenses in parallel → entity → meta.
+"""Full ML training pipeline: features -> lenses -> entity -> score -> meta.
 
 Artifacts are written to the repository ``models/`` directory (not ``backend/models``).
 
@@ -8,8 +8,7 @@ Usage (from repository root):
   python scripts/train_all_models.py
 
 Requires ``data/external`` Elliptic CSVs unless you pass ``--skip-features`` and already have
-``data/processed`` populated. Meta training expects ``data/processed/meta_features.csv``; generate
-that separately if your pipeline does not yet produce it.
+``data/processed`` populated.
 """
 from __future__ import annotations
 
@@ -86,6 +85,17 @@ def main() -> None:
             fut.result()
 
     _run_module("app.ml.training.train_entity", data_dir=data_dir)
+
+    # Score training data with all trained lenses -> train_features_scored.csv
+    _run(
+        [sys.executable, "-m", "scripts.score_training_data", "--data-dir", str(data_dir)],
+        cwd=BACKEND_DIR,
+    )
+    # Build meta_features.csv from scored data
+    _run(
+        [sys.executable, "-m", "scripts.prepare_meta_features", "--data-dir", str(data_dir)],
+        cwd=BACKEND_DIR,
+    )
     _run_module("app.ml.training.train_meta", data_dir=data_dir)
 
 

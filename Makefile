@@ -1,5 +1,6 @@
 .PHONY: dev dev-backend dev-frontend install install-backend install-frontend \
        train train-all features subset-processed prepare-meta-features \
+       score-training-data \
        heuristics-train train-lenses-parallel train-entity train-meta \
        ingest test lint clean
 
@@ -40,6 +41,9 @@ subset-processed:
 # meta_features.csv from train_features (lens scores default to 0 unless columns exist)
 prepare-meta-features:
 	cd backend && python -m scripts.prepare_meta_features --data-dir ../data/processed
+
+score-training-data:
+	cd backend && python -m scripts.score_training_data --data-dir ../data/processed
 
 prepare-meta-features-subset:
 	cd backend && python -m scripts.prepare_meta_features --data-dir ../data/processed_subset

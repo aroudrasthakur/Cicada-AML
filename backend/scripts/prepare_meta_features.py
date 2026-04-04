@@ -57,9 +57,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     data_dir = args.data_dir.resolve()
-    train_path = data_dir / "train_features.csv"
+    scored_path = data_dir / "train_features_scored.csv"
+    train_path = scored_path if scored_path.exists() else data_dir / "train_features.csv"
     if not train_path.exists():
         raise FileNotFoundError(f"Not found: {train_path}")
+    logger.info("Reading from %s", train_path)
 
     df = pd.read_csv(train_path)
     if "label" not in df.columns:

@@ -9,7 +9,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     classification_report,
@@ -24,6 +24,28 @@ from app.ml.ml_device import fit_xgboost_classifier, log_device_banner, xgboost_
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class PlattSigmoidCalibrator:
+    """Sigmoid (Platt) calibration on a fitted classifier's positive-class probabilities.
+
+    Newer scikit-learn rejects ``CalibratedClassifierCV(..., cv='prefit')``; this matches
+    that behavior for XGBoost base models.
+    """
+
+    def __init__(self, base_estimator: XGBClassifier):
+        self.base_estimator = base_estimator
+        self._calibrator = LogisticRegression(solver="lbfgs", max_iter=2000, random_state=42)
+
+    def fit(self, X, y) -> "PlattSigmoidCalibrator":
+        p = self.base_estimator.predict_proba(X)[:, 1].reshape(-1, 1)
+        self._calibrator.fit(p, np.asarray(y).astype(int))
+        return self
+
+    def predict_proba(self, X) -> np.ndarray:
+        p = self.base_estimator.predict_proba(X)[:, 1].reshape(-1, 1)
+        return self._calibrator.predict_proba(p)
+
 
 OUTPUT_DIR = MODELS_DIR / "meta"
 ARTIFACTS_DIR = MODELS_DIR / "artifacts"
@@ -61,7 +83,7 @@ def _load_data(data_dir: Path) -> pd.DataFrame:
         logger.info(
             "Run the full training pipeline to generate stacked lens scores:\n"
             "  make train-all  OR\n"
-            "  python -m scripts.prepare_meta_features --output %s",
+            "  python -m scripts.prepare_meta_features --data-dir %s",
             data_dir,
         )
         sys.exit(1)
@@ -161,7 +183,7 @@ def main() -> None:
     n_neg = len(y_train) - n_pos
     spw = n_neg / max(n_pos, 1)
     logger.info(
-        "Balance: %d pos / %d neg → spw=%.2f  |  train=%d  cal=%d  test=%d",
+        "Balance: %d pos / %d neg -> spw=%.2f  |  train=%d  cal=%d  test=%d",
         n_pos, n_neg, spw, len(y_train), len(y_cal), len(y_test),
     )
 
@@ -183,7 +205,7 @@ def main() -> None:
     )
 
     logger.info("Applying Platt calibration on held-out calibration set...")
-    calibrated = CalibratedClassifierCV(base_model, cv="prefit", method="sigmoid")
+    calibrated = PlattSigmoidCalibrator(base_model)
     calibrated.fit(X_cal, y_cal)
 
     y_prob = calibrated.predict_proba(X_test)[:, 1]
