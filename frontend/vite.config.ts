@@ -28,6 +28,10 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
           ws: true,
+          // Long timeouts: slow Supabase + ML-heavy backend; avoids premature proxy aborts.
+          // ECONNRESET still happens if uvicorn --reload restarts the worker (close dev backend reload).
+          timeout: 180_000,
+          proxyTimeout: 180_000,
         },
       },
     },
