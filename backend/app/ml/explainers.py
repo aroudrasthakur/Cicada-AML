@@ -84,10 +84,14 @@ def generate_explanation_text(
     meta_score: float,
     coverage_tier: str = "tier0",
 ) -> str:
-    """Generate plain-English explanation from heuristic + lens + meta results."""
-    parts: list[str] = []
+    """Generate plain-English explanation from heuristic + lens + meta results.
 
-    # Overall risk assessment
+    Also returns an audit trace via the ``_audit`` key when called through
+    ``generate_explanation_with_audit``.
+    """
+    parts: list[str] = []
+    audit_signals: dict[str, Any] = {}
+
     if meta_score >= 0.9:
         parts.append(f"This transaction is assessed as HIGH RISK (score: {meta_score:.2f}).")
     elif meta_score >= 0.5:
@@ -95,11 +99,21 @@ def generate_explanation_text(
     else:
         parts.append(f"This transaction is assessed as LOW RISK (score: {meta_score:.2f}).")
 
-    # Heuristic summary
     triggered = heuristic_results.get("triggered_count", 0)
-    top_typology = heuristic_results.get("top_typology")
+    top_typology_raw = heuristic_results.get("top_typology")
+
+    from app.ml.typology_taxonomy import heuristic_name_to_taxonomy
+    top_typology_mapped = heuristic_name_to_taxonomy(top_typology_raw) if top_typology_raw else None
+    display_typology = top_typology_mapped or top_typology_raw
+
+    audit_signals["top_typology_raw"] = top_typology_raw
+    audit_signals["top_typology_mapped"] = top_typology_mapped
+    audit_signals["taxonomy_mapping_failed"] = (
+        top_typology_raw is not None and top_typology_mapped is None
+    )
+
     if triggered > 0:
-        match_str = f' The strongest match is "{top_typology}"' if top_typology else ""
+        match_str = f' The strongest match is "{display_typology}"' if display_typology else ""
         conf = heuristic_results.get("top_confidence", 0)
         parts.append(
             f"{triggered} rule-based indicator(s) fired.{match_str}"
@@ -108,7 +122,6 @@ def generate_explanation_text(
     else:
         parts.append("No rule-based indicators were triggered.")
 
-    # Lens contributions
     active_lenses = {k: v for k, v in lens_scores.items() if v > 0.1 and not k.startswith("_")}
     if active_lenses:
         sorted_lenses = sorted(active_lenses.items(), key=lambda x: x[1], reverse=True)
@@ -117,7 +130,9 @@ def generate_explanation_text(
     else:
         parts.append("No ML lens produced a significant signal.")
 
-    # Behavioral anomaly callout
+    audit_signals["active_lenses"] = {k: round(v, 4) for k, v in active_lenses.items()}
+    audit_signals["meta_score"] = round(meta_score, 4)
+
     anomaly = lens_scores.get("behavioral_anomaly_score", 0)
     if anomaly > 0.5:
         parts.append(
@@ -125,7 +140,6 @@ def generate_explanation_text(
             f"(anomaly score: {anomaly:.2f})."
         )
 
-    # Coverage caveat
     if coverage_tier == "tier0":
         parts.append(
             "Note: This assessment is based on on-chain data only. "
@@ -137,7 +151,41 @@ def generate_explanation_text(
             "Full entity and richer off-chain context were not available."
         )
 
-    return " ".join(parts)
+    text = " ".join(parts)
+
+    if audit_signals.get("taxonomy_mapping_failed"):
+        logger.warning(
+            "explanation_audit | unmapped_typology=%s — raw class name leaked into text",
+            top_typology_raw,
+        )
+
+    return text
+
+
+def generate_explanation_with_audit(
+    heuristic_results: dict[str, Any],
+    lens_scores: dict[str, float],
+    meta_score: float,
+    coverage_tier: str = "tier0",
+) -> dict[str, Any]:
+    """Same as generate_explanation_text but returns ``{text, _audit}`` for traceability."""
+    from app.ml.typology_taxonomy import heuristic_name_to_taxonomy
+
+    top_raw = heuristic_results.get("top_typology")
+    top_mapped = heuristic_name_to_taxonomy(top_raw) if top_raw else None
+    active_lenses = {k: v for k, v in lens_scores.items() if v > 0.1 and not k.startswith("_")}
+
+    text = generate_explanation_text(heuristic_results, lens_scores, meta_score, coverage_tier)
+    return {
+        "text": text,
+        "_audit": {
+            "top_typology_raw": top_raw,
+            "top_typology_mapped": top_mapped,
+            "taxonomy_mapping_failed": top_raw is not None and top_mapped is None,
+            "active_lenses": {k: round(v, 4) for k, v in active_lenses.items()},
+            "meta_score": round(meta_score, 4),
+        },
+    }
 
 
 def _humanize_lens(key: str) -> str:

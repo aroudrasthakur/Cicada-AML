@@ -70,12 +70,27 @@ def run_all(
     
     top_typology = None
     top_confidence = None
+    top_k_triggers: list[dict] = []
     if triggered_ids:
-        best_idx = max(triggered_ids, key=lambda i: heuristic_vector[i - 1])
-        best_h = all_heuristics.get(best_idx)
-        top_typology = best_h.name if best_h else f"heuristic_{best_idx}"
-        top_confidence = heuristic_vector[best_idx - 1]
-    
+        ranked = sorted(triggered_ids, key=lambda i: heuristic_vector[i - 1], reverse=True)
+        for hid in ranked[:5]:
+            h = all_heuristics.get(hid)
+            top_k_triggers.append({
+                "heuristic_id": hid,
+                "name": getattr(h, "name", f"heuristic_{hid}"),
+                "confidence": heuristic_vector[hid - 1],
+            })
+        best = top_k_triggers[0]
+        top_typology = best["name"]
+        top_confidence = best["confidence"]
+
+    inapplicable_count = sum(1 for a in applicability_vector if a != "applicable")
+    logger.info(
+        "heuristic_trace | triggered=%d/%d inapplicable=%d top_k=%s",
+        len(triggered_ids), TOTAL_HEURISTICS, inapplicable_count,
+        [(t["name"], round(t["confidence"], 3)) for t in top_k_triggers],
+    )
+
     return {
         "heuristic_vector": heuristic_vector,
         "applicability_vector": applicability_vector,
@@ -83,5 +98,6 @@ def run_all(
         "triggered_count": len(triggered_ids),
         "top_typology": top_typology,
         "top_confidence": top_confidence,
+        "top_k_triggers": top_k_triggers,
         "explanations": explanations,
     }

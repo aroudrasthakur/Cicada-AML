@@ -344,6 +344,12 @@ class InferencePipeline:
         decision_threshold = self.threshold_config.get("decision_threshold", 0.5)
         high_threshold = self.threshold_config.get("high_risk_threshold", 0.9)
         low_ceiling = self.threshold_config.get("low_risk_ceiling", 0.3)
+        meta_provenance = getattr(self, "_last_meta_provenance", "unknown")
+
+        logger.info(
+            "threshold_trace | decision=%.4f high=%.4f low_ceiling=%.4f provenance=%s",
+            decision_threshold, high_threshold, low_ceiling, meta_provenance,
+        )
 
         risk_levels = np.where(
             meta_scores >= high_threshold, "high",
@@ -360,6 +366,7 @@ class InferencePipeline:
                 "transaction_id": tx.get("transaction_id") or tx.get("id", f"tx_{i}"),
                 "meta_score": float(meta_scores[i]),
                 "risk_level": str(risk_levels[i]),
+                "meta_provenance": meta_provenance,
                 "behavioral_score": float(beh_scores[i]),
                 "behavioral_anomaly_score": float(beh_anomaly[i]),
                 "graph_score": float(per_tx_graph_scores[i]),
@@ -442,14 +449,28 @@ class InferencePipeline:
             feature_order = self.meta_feature_names or list(meta_dict_cols.keys())
             X = np.column_stack([meta_dict_cols.get(f, np.zeros(n)) for f in feature_order]).astype(np.float32)
             proba = xgb_predict_proba(self.meta_model, X)
-            return proba[:, 1].astype(np.float64)
+            scores = proba[:, 1].astype(np.float64)
+            logger.info(
+                "meta_provenance | method=learned_model features=%s "
+                "mean_score=%.4f std_score=%.4f n=%d",
+                feature_order, float(scores.mean()), float(scores.std()), n,
+            )
+            self._last_meta_provenance = "learned"
+            return scores
 
-        weights = {
+        fallback_weights = {
             "behavioral_score": 0.225, "graph_score": 0.175, "entity_score": 0.125,
             "temporal_score": 0.175, "offramp_score": 0.125,
             "heuristic_max": 0.175,
         }
         score = np.zeros(n, dtype=np.float64)
-        for k, w in weights.items():
+        for k, w in fallback_weights.items():
             score += meta_dict_cols.get(k, np.zeros(n)) * w
-        return np.clip(score, 0, 1)
+        score = np.clip(score, 0, 1)
+        logger.info(
+            "meta_provenance | method=fallback_fusion weights=%s "
+            "mean_score=%.4f std_score=%.4f n=%d",
+            fallback_weights, float(score.mean()), float(score.std()), n,
+        )
+        self._last_meta_provenance = "fallback"
+        return score

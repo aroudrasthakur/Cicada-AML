@@ -84,9 +84,10 @@ class PeelChain(BaseHeuristic):
             data = graph.get_edge_data(addr, s)
             if data:
                 amt = data.get("amount", data.get("value", 0))
-                ts = data.get("timestamp", data.get("block_number", 0))
+                ts = data.get("timestamp", data.get("block_number"))
                 edges.append((ts, amt))
-        edges.sort(key=lambda x: x[0])
+        try:
+            edges.sort(key=lambda x: (x[0] is None, x[0]))
         if len(edges) < 3:
             return HeuristicResult()
         decreasing = sum(
@@ -113,10 +114,10 @@ class FanOutDispersal(BaseHeuristic):
     def evaluate(self, tx=None, wallet=None, graph=None, features=None, context=None):
         if graph is None or not wallet or not wallet.get("address"):
             return HeuristicResult()
-        triggered, out_deg = check_one_to_many(graph, wallet["address"], threshold=10)
+        triggered, out_deg = check_one_to_many(graph, wallet["address"], threshold=5)
         if not triggered and features:
             out_deg = features.get("out_degree", 0)
-            triggered = out_deg >= 10
+            triggered = out_deg >= 5
         if triggered:
             return HeuristicResult(
                 triggered=True,
@@ -138,10 +139,10 @@ class FanInAggregation(BaseHeuristic):
     def evaluate(self, tx=None, wallet=None, graph=None, features=None, context=None):
         if graph is None or not wallet or not wallet.get("address"):
             return HeuristicResult()
-        triggered, in_deg = check_many_to_one(graph, wallet["address"], threshold=10)
+        triggered, in_deg = check_many_to_one(graph, wallet["address"], threshold=5)
         if not triggered and features:
             in_deg = features.get("in_degree", 0)
-            triggered = in_deg >= 10
+            triggered = in_deg >= 5
         if triggered:
             return HeuristicResult(
                 triggered=True,
