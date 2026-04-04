@@ -4,43 +4,43 @@ overview: "Build a production-grade Aegis AML platform from scratch: FastAPI bac
 todos:
   - id: scaffolding
     content: "Phase 1: Project scaffolding - backend (FastAPI structure, deps, config) + frontend (Vite + React + Tailwind + routing) + root files (docker-compose, .gitignore, Makefile, README)"
-    status: pending
+    status: completed
   - id: database
     content: "Phase 2: Supabase migrations - core + intelligence tables (transactions, wallets, edges, heuristic_results, transaction_scores, wallet_scores, network_cases, reports, document_events, entity_links, address_tags, model_metrics, threshold_policies, RLS) + seed data"
-    status: pending
+    status: completed
   - id: ingestion
     content: "Phase 3: Data ingestion pipeline - CSV upload, Elliptic loader, normalization, cleaning, wallet creation, Supabase persistence"
-    status: pending
+    status: completed
   - id: graph
     content: "Phase 4: Graph construction - NetworkX directed temporal graph, node/edge features, k-hop expansion, subgraph extraction"
-    status: pending
+    status: completed
   - id: features
     content: "Phase 5: Feature engineering - transaction features, wallet/neighborhood features, subgraph/sequence features, combined feature matrix"
-    status: pending
+    status: completed
   - id: heuristics
     content: "Phase 6: Heuristic engine - 185 typology-specific rule checks (traditional 1-90, blockchain 91-142, AI-enabled 156-175, hybrid 143-155/176-185), each returning triggered/confidence/explanation + applicability + evidence"
-    status: pending
+    status: completed
   - id: lens-models
     content: "Phase 7: 6 Lens models - Behavioral (XGBoost+Autoencoder), Graph (GAT), Entity (Louvain/Leiden+clustering), Temporal (LSTM), Document (XGBoost+NLP), Off-ramp (XGBoost+classifier). Each consumes heuristic outputs + lens-specific features."
-    status: pending
+    status: completed
   - id: training
     content: "Phase 7b: Model training - class imbalance handling, per-lens training procedures, hyperparameter tuning, time-aware cross-validation, training orchestration in dependency order"
-    status: pending
+    status: completed
   - id: meta-model
     content: "Phase 8: Meta-model - XGBoost meta-learner combining 6 lens scores + anomaly signals + heuristic aggregates + data-availability flags with calibration and policy thresholds"
-    status: pending
+    status: completed
   - id: inference
     content: "Phase 9: Inference pipeline - heuristics-first then lens models, case assembly, explanation generation, SHAP"
-    status: pending
+    status: completed
   - id: api-routes
     content: "Phase 10: API routes - all FastAPI endpoints for ingest, transactions, wallets, heuristics, networks, explanations, reports"
-    status: pending
+    status: completed
   - id: frontend
     content: "Phase 11: Frontend dashboard - 6 pages (Dashboard, Transactions, Wallet, NetworkCases, FlowExplorer, Reports) + 8+ shared components + Cytoscape.js graph + heuristic display"
-    status: pending
+    status: completed
   - id: integration
     content: "Phase 12: Integration and polish - metrics reporting, report generation, storage service, out-of-time validation, drift monitoring, and end-to-end testing"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -53,6 +53,7 @@ Primary objective: produce a **risk-ranked queue of suspicious activity** with m
 Explicit non-goal: "identify all money laundering cases." In AML this is not achievable; the system is judged by **coverage, recall, precision, and investigation efficiency** under uncertainty.
 
 Required operating targets (to be tuned per deployment cohort):
+
 - Typology-level recall floor and precision floor for high-priority typologies
 - False positives per 1,000 transactions ceiling by segment
 - Precision@K for analyst queue quality
@@ -193,7 +194,7 @@ Critical guardrail: if required data for a heuristic is missing, the heuristic m
 ### Root
 
 - `docker-compose.yml` for backend + frontend
-- `.gitignore` (Python, Node, .env, models/, data/, __pycache__, .venv, node_modules)
+- `.gitignore` (Python, Node, .env, models/, data/, **pycache**, .venv, node_modules)
 - `Makefile` with common commands (dev, train, ingest, test, lint)
 - `README.md`
 
@@ -319,6 +320,7 @@ The heuristics serve as a known-pattern floor. The lens models (Phase 7) are spe
 ### Heuristic output per transaction
 
 Each heuristic returns:
+
 - `triggered`: bool (did this pattern fire?)
 - `confidence`: float 0.0-1.0 (how strongly does the evidence match?)
 - `explanation`: string (plain-English reason, e.g. "14 sub-threshold transfers in 8 minutes")
@@ -338,6 +340,7 @@ Each heuristic returns:
 **`traditional.py`** - Patterns 1-90 (adapted for on-chain analogs where applicable)
 
 On-chain detectable examples:
+
 - #1 Cash structuring / smurfing -> Detect repeated sub-threshold transfers, many branches, same beneficiary
 - #5 Round-dollar deposits -> Detect repeated fixed-amount transfers
 - #6 Rapid cash in then wire out -> Short holding periods, near-zero ending balance
@@ -350,11 +353,13 @@ On-chain detectable examples:
 - #35 ACH micro-splitting -> High count low-value transfers to related endpoints
 
 Patterns requiring off-chain data (implemented as stubs that activate when external data is provided):
+
 - #2 Cash-intensive front business, #28 Shell-company invoice payments, #41-58 Trade-based patterns, etc.
 
 **`blockchain.py`** - Patterns 91-142 (fully implementable on-chain)
 
 All have direct on-chain detection logic:
+
 - #91 Peel chain - sequential transfers with residual balance pattern
 - #92 Fan-out dispersal - high out-degree burst detection
 - #93 Fan-in aggregation - high in-degree concentration
@@ -371,6 +376,7 @@ All have direct on-chain detection logic:
 **`hybrid.py`** - Patterns 143-155, 176-185
 
 Cross-rail patterns where on-chain components are detectable:
+
 - #143 KYC-borrowed account cashout - identity mismatch patterns
 - #144 P2P exchange laundering - many counterparties
 - #145 Crypto ATM cashout - frequent kiosk-linked patterns
@@ -383,6 +389,7 @@ Cross-rail patterns where on-chain components are detectable:
 **`ai_enabled.py`** - Patterns 156-175
 
 Detect the behavioral signatures that AI-enabled laundering creates:
+
 - #161 Automated transaction scheduling - clockwork timing, 24/7 consistency
 - #162 Reinforcement-learned threshold avoidance - dynamic near-threshold behavior
 - #163 Graph-aware route optimization - routing avoids screened clusters
@@ -403,6 +410,7 @@ No typology ID may belong to more than one environment module. Enforce this in C
 ### Common red flags (cross-cutting, Section 6 of atlas)
 
 Implemented as 10 additional utility functions in `backend/app/ml/heuristics/common_red_flags.py` that are used as building blocks by many heuristics:
+
 1. Fragmented transactions just below thresholds
 2. Rapid movement with minimal retained balances
 3. Circular or self-referential flows
@@ -419,6 +427,7 @@ Implemented as 10 additional utility functions in `backend/app/ml/heuristics/com
 ## Phase 7: 6 Lens Models (Layer A)
 
 Each lens model receives two categories of input:
+
 1. **Heuristic features**: The 185-score vector from Phase 6 (filtered to typologies tagged for this lens)
 2. **Lens-specific engineered features**: From Phase 5 feature engineering
 
@@ -445,6 +454,7 @@ This dependency is intentional: entity resolution benefits from the learned stru
 **Architecture**: XGBoost classifier + Autoencoder for novelty detection
 
 **Inputs**:
+
 - Heuristic scores tagged "behavioral" (e.g. #1 structuring, #5 round amounts, #17 loan-back, #23 pass-through, #96 self-transfer chains, #105 cross-wallet loops)
 - Transaction features: amount, log(amount), fee, round-number indicator, burstiness, deviation from historical pattern
 - Wallet features: total_in/total_out ratio, unique counterparties, average path depth
@@ -452,6 +462,7 @@ This dependency is intentional: entity resolution benefits from the learned stru
 **Outputs**: behavioral_score (float), behavioral_anomaly_score (float from autoencoder)
 
 **Files**:
+
 - `backend/app/ml/lenses/behavioral_model.py` - Model definition + inference
 - `backend/app/ml/training/train_behavioral.py` - Training script
 - `models/behavioral/xgboost_behavioral.pkl`, `models/behavioral/autoencoder_behavioral.pt`
@@ -463,6 +474,7 @@ This dependency is intentional: entity resolution benefits from the learned stru
 **Architecture**: GAT (Graph Attention Network) via PyTorch Geometric
 
 **Inputs**:
+
 - Heuristic scores tagged "graph" (e.g. #91 peel chain, #92 fan-out, #93 fan-in, #100 consolidation, #102 CoinJoin, #119 wallet cluster fragmentation)
 - Graph features: in/out degree, weighted volume, fan-in/fan-out ratio, centrality scores, 1-hop/2-hop suspicious neighbor ratio, clustering coefficient, relay pattern score
 - Node features from graph construction
@@ -470,6 +482,7 @@ This dependency is intentional: entity resolution benefits from the learned stru
 **Outputs**: graph_score (float), node embeddings (for clustering and Entity Lens consumption)
 
 **Files**:
+
 - `backend/app/ml/lenses/graph_model.py` - GAT definition + inference
 - `backend/app/ml/training/train_graph.py` - Training script
 - Convert NetworkX to PyG Data objects
@@ -483,6 +496,7 @@ This dependency is intentional: entity resolution benefits from the learned stru
 **Architecture**: Louvain/Leiden community detection + DBSCAN on graph embeddings + entity resolution classifier
 
 **Inputs**:
+
 - Heuristic scores tagged "entity" (e.g. #96 self-transfer, #110 gas sponsorship distancing, #119 wallet cluster fragmentation, #135 airdrop farming/sybil, #141 exchange mule ring, #164 botnet orchestration)
 - Entity features: shared counterparty count, gas sponsor overlap, timing synchronization, device/IP overlap (when available)
 - Graph embeddings from Graph Lens (dependency: Graph Lens must run first)
@@ -492,6 +506,7 @@ This dependency is intentional: entity resolution benefits from the learned stru
 Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score` with downgraded confidence and sets `entity_lens_mode=limited`.
 
 **Files**:
+
 - `backend/app/ml/lenses/entity_model.py` - Model definition + inference
 - `backend/app/ml/training/train_entity.py` - Training script
 - `backend/app/services/clustering_service.py` - Louvain/Leiden + DBSCAN
@@ -504,6 +519,7 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Architecture**: LSTM sequence model
 
 **Inputs**:
+
 - Heuristic scores tagged "temporal" (e.g. #6 rapid in/out, #31 dormant activation, #98 time-delay layering, #161 automated scheduling, #162 threshold avoidance, #165 autonomous execution)
 - Temporal features per wallet: ordered transaction sequences with (amount, time_delta, direction, counterparty_risk)
 - Subgraph features: velocity score, synchronized transfer score, burstiness
@@ -511,6 +527,7 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Outputs**: temporal_score (float)
 
 **Files**:
+
 - `backend/app/ml/lenses/temporal_model.py` - LSTM definition + inference
 - `backend/app/ml/training/train_temporal.py` - Training script
 - `models/temporal/lstm_model.pt`
@@ -522,14 +539,16 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Architecture**: XGBoost classifier + optional NLP for narrative analysis
 
 **Inputs**:
+
 - Heuristic scores tagged "document" (e.g. #28 shell-company invoices, #41-55 trade-based patterns, #156 synthetic identity, #160 AI-written invoices, #168 document laundering via image models, #171 synthetic beneficial-owner narratives)
 - Document features: metadata consistency scores, narrative complexity metrics, template repetition detection
 - Note: This lens activates fully when off-chain document data is provided. With on-chain only data, it operates in reduced mode using transaction metadata patterns.
- - In reduced mode, cap document contribution in the meta-model and expose `document_lens_mode=limited` in explanations.
+- In reduced mode, cap document contribution in the meta-model and expose `document_lens_mode=limited` in explanations.
 
 **Outputs**: document_score (float)
 
 **Files**:
+
 - `backend/app/ml/lenses/document_model.py` - Model definition + inference
 - `backend/app/ml/training/train_document.py` - Training script
 - `models/document/document_classifier.pkl`
@@ -541,12 +560,14 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Architecture**: XGBoost classifier focused on exit/conversion patterns
 
 **Inputs**:
+
 - Heuristic scores tagged "offramp" (e.g. #93 fan-in aggregation, #106 OTC broker layering, #120 tokenized gift-card cashout, #141 exchange mule ring, #143-155 hybrid off-ramp patterns, #145 crypto ATM cashout, #146 prepaid debit off-ramp)
 - Off-ramp features: proximity to known exchange addresses, cash-out pattern scores, conversion timing, exit concentration, exposure to tagged entities, inbound suspicious score
 
 **Outputs**: offramp_score (float)
 
 **Files**:
+
 - `backend/app/ml/lenses/offramp_model.py` - Model definition + inference
 - `backend/app/ml/training/train_offramp.py` - Training script
 - `models/offramp/offramp_classifier.pkl`
@@ -594,12 +615,14 @@ AML data is severely imbalanced (~2.2% illicit in Elliptic, often <1% in product
 ### Per-Model Training Procedures
 
 **Behavioral Lens** (`backend/app/ml/training/train_behavioral.py`):
+
 1. Assemble input: transaction features + heuristic scores tagged "behavioral" + data availability flags
 2. XGBoost classifier: `scale_pos_weight`, `max_depth=6`, `learning_rate=0.05`, `n_estimators=500`, early stopping on validation PR-AUC (patience=50 rounds)
 3. Autoencoder: train on licit-only transactions. Architecture: 3-layer encoder (input_dim→128→64→32) and symmetric decoder (32→64→128→input_dim). MSE reconstruction loss. Adam optimizer lr=1e-3, 100 epochs, early stopping on validation reconstruction error (patience=15)
 4. Output artifacts: `xgboost_behavioral.pkl`, `autoencoder_behavioral.pt`
 
 **Graph Lens** (`backend/app/ml/training/train_graph.py`):
+
 1. Convert NetworkX graph to PyG Data object. Node feature vector = graph features + heuristic scores tagged "graph". Edge index from edge list.
 2. GAT: 2-layer GAT, 8 attention heads per layer, hidden_dim=64, dropout=0.3, weighted cross-entropy loss
 3. Train: Adam optimizer lr=5e-4, 200 epochs, early stopping on validation F1 (patience=30)
@@ -607,6 +630,7 @@ AML data is severely imbalanced (~2.2% illicit in Elliptic, often <1% in product
 5. Output artifacts: `gat_model.pt`, `graph_config.json`, `node_mapping.json`, `node_embeddings.npy`
 
 **Entity Lens** (`backend/app/ml/training/train_entity.py`):
+
 1. Run Louvain/Leiden community detection on the full graph (unsupervised, uses all nodes including unknowns)
 2. Load graph embeddings from `node_embeddings.npy` (produced by Graph Lens training — dependency)
 3. Compute cluster-level features: cluster size, internal edge density, mean node embedding distance, shared counterparty count, timing synchronization score
@@ -615,22 +639,26 @@ AML data is severely imbalanced (~2.2% illicit in Elliptic, often <1% in product
 6. Output artifacts: `entity_classifier.pkl`, `community_assignments.json`
 
 **Temporal Lens** (`backend/app/ml/training/train_temporal.py`):
+
 1. Build per-wallet ordered transaction sequences. Each time step in the sequence = (feature vector + heuristic scores tagged "temporal"). Pad/truncate to fixed length (50 most recent transactions per wallet).
 2. LSTM: 2-layer, hidden_dim=128, dropout=0.2, followed by a fully connected classification head (128→64→1, sigmoid)
 3. Train: Adam optimizer lr=1e-3, weighted cross-entropy with oversampled illicit sequences, 100 epochs, early stopping on validation PR-AUC (patience=20)
 4. Output artifacts: `lstm_model.pt`
 
 **Document Lens** (`backend/app/ml/training/train_document.py`):
+
 1. On Elliptic (no document data available): train in reduced mode using only heuristic scores tagged "document" + transaction metadata features. This lens will have minimal discriminative power on Elliptic — expected behavior.
 2. On custom CSV with document_events data: train XGBoost on metadata consistency scores, narrative complexity features, template repetition detection signals
 3. Output artifacts: `document_classifier.pkl`
 
 **Off-ramp Lens** (`backend/app/ml/training/train_offramp.py`):
+
 1. Assemble input: off-ramp features (proximity to tagged exchange/OTC addresses, exit concentration, conversion timing, inbound suspicious score) + heuristic scores tagged "offramp"
 2. XGBoost classifier with same hyperparameter strategy as Behavioral Lens
 3. Output artifacts: `offramp_classifier.pkl`
 
 **Meta-Model** (`backend/app/ml/training/train_meta.py`):
+
 1. Requires all 6 lens models to be trained first. Run inference on validation set to produce lens scores.
 2. Train on stacked features (see Phase 8 for full input spec)
 3. Apply calibration (Platt scaling or isotonic — choose whichever produces lower ECE on validation)
@@ -659,6 +687,7 @@ The `Makefile` target `make train` runs the full training pipeline in dependency
 5. `make train-meta` — Meta-model (after all 6 lenses complete, needs lens scores on validation set)
 
 Each training script:
+
 - Logs all metrics (PR-AUC, F1, Precision@K, calibration error) to the `model_metrics` table
 - Saves model artifacts to the `models/` directory
 - Writes a training manifest (hyperparameters used, data split stats, runtime) to `models/artifacts/training_manifest.json`
@@ -777,25 +806,31 @@ Repository layer in `backend/app/repositories/` for Supabase queries. Add `heuri
 ### Metrics (`backend/app/utils/metrics.py`)
 
 Classification metrics:
+
 - Precision, Recall, F1, PR-AUC, ROC-AUC, confusion matrix, balanced accuracy, MCC
 - Precision/Recall with confidence intervals (bootstrap)
 
 Ranking metrics:
+
 - Precision@K, Recall@K, Top-K hit rate
 
 Graph/case metrics:
+
 - Suspicious cluster purity, suspicious cluster recall, path detection success, mean suspicious path length, time-to-detection, false positives per 1,000 transactions
 
 Investigation usefulness metrics (for demo reporting):
+
 - Number of risky cases surfaced, average explanation coverage, reduction in analyst search space, percentage of cases with traceable source-to-destination path
 
 Governance metrics (required for production posture):
+
 - Typology-level recall and precision table (all 185 IDs; explicit N/A when inapplicable)
 - Segment/cohort metrics (by chain, asset type, customer type, jurisdiction)
 - Calibration error (ECE/Brier) and threshold stability by cohort
 - Drift metrics (PSI/feature drift, label drift) with alert thresholds
 
 Performance gates (must pass before promoting models):
+
 - High-priority typology recall floor met
 - False positives per 1,000 transactions below cohort policy ceiling
 - Calibration error below target
@@ -859,6 +894,7 @@ Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, and measurable t
 Total files to create: ~125+
 
 **Backend** (75+ files):
+
 - `backend/app/`: main.py, config.py, supabase_client.py, dependencies.py
 - `backend/app/api/`: routes_ingest.py, routes_transactions.py, routes_wallets.py, routes_heuristics.py, routes_networks.py, routes_explanations.py, routes_reports.py, routes_metrics.py, routes_policies.py
 - `backend/app/schemas/`: transaction.py, wallet.py, heuristic.py, network_case.py, explanation.py, report.py, data_contract.py
@@ -873,6 +909,7 @@ Total files to create: ~125+
 - `backend/`: requirements.txt, Dockerfile, .env.example
 
 **Frontend** (30+ files):
+
 - `frontend/src/`: main.tsx, App.tsx
 - `frontend/src/pages/`: DashboardPage.tsx, TransactionsPage.tsx, WalletPage.tsx, NetworkCasesPage.tsx, FlowExplorerPage.tsx, ReportsPage.tsx
 - `frontend/src/components/`: RiskSummaryCards.tsx, TransactionTable.tsx, WalletDetailPanel.tsx, NetworkGraph.tsx, FlowTimeline.tsx, ExplanationPanel.tsx, HeuristicBadges.tsx, LensRadarChart.tsx, FiltersBar.tsx, CaseReportCard.tsx
@@ -883,11 +920,14 @@ Total files to create: ~125+
 - `frontend/`: package.json, vite.config.ts, tailwind.config.js, tsconfig.json
 
 **Supabase** (16 files):
+
 - `supabase/`: config.toml, seed.sql
 - `supabase/migrations/`: 001 through 014 .sql files
 
 **Model directories** (with .gitkeep):
+
 - `models/behavioral/`, `models/graph/`, `models/entity/`, `models/temporal/`, `models/document/`, `models/offramp/`, `models/meta/`, `models/artifacts/`
 
 **Root** (5 files):
+
 - docker-compose.yml, .gitignore, Makefile, README.md
