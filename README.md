@@ -504,7 +504,7 @@ aegis-aml/
 │   ├── offramp/
 │   ├── meta/
 │   └── artifacts/
-└── docs/                     # Documentation
+└── docs/                     # Reference materials
 ```
 
 ---
@@ -551,12 +551,12 @@ pytest tests/test_drift_monitoring.py # Drift detection
 
 ---
 
-## 📚 Documentation
+## 📚 Reference
 
 - [Architecture Overview](docs/architecture.md)
 - [Heuristic Catalog](docs/heuristics.md)
 - [Model Training Guide](docs/training.md)
-- [API Documentation](docs/api.md)
+- [HTTP API (docs/api.md)](docs/api.md)
 - [Deployment Guide](docs/deployment.md)
 
 ---

@@ -33,7 +33,6 @@ META_FEATURES = [
     "heuristic_top_confidence",
     "heuristic_triggered_ratio",
     "has_entity_intel",
-    "has_document_intel",
     "has_address_tags",
     "coverage_tier_0",
     "coverage_tier_1",

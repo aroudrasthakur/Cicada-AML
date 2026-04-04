@@ -6,10 +6,9 @@ def assess_data_availability(
     has_transactions: bool = True,
     has_address_tags: bool = False,
     has_entity_links: bool = False,
-    has_document_events: bool = False,
 ) -> DataAvailabilityFlags:
     """Determine coverage tier based on available data sources."""
-    if has_entity_links or has_document_events:
+    if has_entity_links:
         tier = CoverageTier.TIER2
     elif has_address_tags:
         tier = CoverageTier.TIER1
@@ -18,7 +17,6 @@ def assess_data_availability(
     
     return DataAvailabilityFlags(
         has_entity_intel=has_entity_links,
-        has_document_intel=has_document_events,
         has_address_tags=has_address_tags,
         coverage_tier=tier,
     )

@@ -398,7 +398,7 @@ _STUB_DEFS: list[tuple[int, str, list[str], str, list[str]]] = [
     (52, "FalseReturnsRebates", ["behavioral"],
      "Fabricating returns or rebates to extract funds.", ["returns_data"]),
     (53, "CustomsBrokerCollusion", ["entity"],
-     "Collusion with customs brokers to falsify documents.", ["customs_data"]),
+     "Collusion with customs brokers to falsify trade paperwork.", ["customs_data"]),
     (54, "WarehouseReceiptFraud", ["entity"],
      "Fraudulent warehouse receipts for non-existent goods.", ["warehouse_data"]),
     (55, "TradeFinanceLCAbuse", ["entity"],

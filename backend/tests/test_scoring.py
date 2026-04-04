@@ -80,7 +80,6 @@ class TestScoreTransactionsReturnsResults:
         from app.schemas.data_contract import DataAvailabilityFlags, CoverageTier
         mock_avail.return_value = DataAvailabilityFlags(
             has_entity_intel=False,
-            has_document_intel=False,
             has_address_tags=False,
             coverage_tier=CoverageTier.TIER0,
         )

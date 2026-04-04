@@ -110,7 +110,6 @@ class InferencePipeline:
             has_transactions=len(transactions) > 0,
             has_address_tags=context.get("has_address_tags", False),
             has_entity_links=context.get("has_entity_links", False),
-            has_document_events=context.get("has_document_events", False),
         )
 
         results = []
@@ -260,7 +259,6 @@ class InferencePipeline:
             "heuristic_top_confidence": float(h_result["top_confidence"] or 0),
             "heuristic_triggered_ratio": triggered / max(len(h_vec), 1),
             "has_entity_intel": float(data_flags.has_entity_intel),
-            "has_document_intel": float(data_flags.has_document_intel),
             "has_address_tags": float(data_flags.has_address_tags),
             "coverage_tier_0": float(data_flags.coverage_tier.value == "tier0"),
             "coverage_tier_1": float(data_flags.coverage_tier.value == "tier1"),

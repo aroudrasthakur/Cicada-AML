@@ -8,7 +8,6 @@ ALTER TABLE public.wallet_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.network_cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.network_case_wallets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.document_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.entity_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.address_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.model_metrics ENABLE ROW LEVEL SECURITY;
@@ -41,9 +40,6 @@ CREATE POLICY "authenticated_insert_network_case_wallets" ON public.network_case
 
 CREATE POLICY "authenticated_select_reports" ON public.reports FOR SELECT TO authenticated USING (true);
 CREATE POLICY "authenticated_insert_reports" ON public.reports FOR INSERT TO authenticated WITH CHECK (true);
-
-CREATE POLICY "authenticated_select_document_events" ON public.document_events FOR SELECT TO authenticated USING (true);
-CREATE POLICY "authenticated_insert_document_events" ON public.document_events FOR INSERT TO authenticated WITH CHECK (true);
 
 CREATE POLICY "authenticated_select_entity_links" ON public.entity_links FOR SELECT TO authenticated USING (true);
 CREATE POLICY "authenticated_insert_entity_links" ON public.entity_links FOR INSERT TO authenticated WITH CHECK (true);

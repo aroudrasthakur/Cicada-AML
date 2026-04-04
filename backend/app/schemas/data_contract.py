@@ -11,7 +11,6 @@ class CoverageTier(str, Enum):
 
 class DataAvailabilityFlags(BaseModel):
     has_entity_intel: bool = False
-    has_document_intel: bool = False
     has_address_tags: bool = False
     coverage_tier: CoverageTier = CoverageTier.TIER0
 

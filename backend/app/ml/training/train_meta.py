@@ -44,7 +44,6 @@ META_FEATURES = [
     "heuristic_triggered_ratio",
     # data availability flags
     "has_entity_intel",
-    "has_document_intel",
     "has_address_tags",
     # coverage encoding
     "coverage_tier_0",

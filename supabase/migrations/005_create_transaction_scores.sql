@@ -6,7 +6,6 @@ CREATE TABLE public.transaction_scores (
   graph_score FLOAT,
   entity_score FLOAT,
   temporal_score FLOAT,
-  document_score FLOAT,
   offramp_score FLOAT,
   meta_score FLOAT,
   predicted_label TEXT,

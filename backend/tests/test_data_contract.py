@@ -18,10 +18,6 @@ class TestCoverageTiers:
         flags = assess_data_availability(has_transactions=True, has_entity_links=True)
         assert flags.coverage_tier == CoverageTier.TIER2
 
-    def test_tier2_with_document_events(self):
-        flags = assess_data_availability(has_transactions=True, has_document_events=True)
-        assert flags.coverage_tier == CoverageTier.TIER2
-
     def test_tier2_takes_precedence_over_tier1(self):
         flags = assess_data_availability(
             has_transactions=True,
@@ -35,16 +31,11 @@ class TestDataAvailabilityFlags:
     def test_default_flags_are_false(self):
         flags = assess_data_availability(has_transactions=True)
         assert flags.has_entity_intel is False
-        assert flags.has_document_intel is False
         assert flags.has_address_tags is False
 
     def test_entity_flag_set(self):
         flags = assess_data_availability(has_entity_links=True)
         assert flags.has_entity_intel is True
-
-    def test_document_flag_set(self):
-        flags = assess_data_availability(has_document_events=True)
-        assert flags.has_document_intel is True
 
     def test_address_tags_flag_set(self):
         flags = assess_data_availability(has_address_tags=True)
