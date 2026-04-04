@@ -1,12 +1,12 @@
 ---
 name: Aegis AML MVP
-overview: "Build the full Aegis AML platform from scratch: FastAPI backend with a 185-typology heuristic engine feeding 6 lens-specific ML models (Behavioral, Graph, Entity, Temporal, Document, Off-ramp) stacked under an XGBoost meta-learner, Supabase database, and a React + Vite + Tailwind + Cytoscape.js frontend dashboard."
+overview: "Build a production-grade Aegis AML platform from scratch: FastAPI backend with a 185-typology heuristic engine feeding 6 lens-specific ML models (Behavioral, Graph, Entity, Temporal, Document, Off-ramp) stacked under an XGBoost meta-learner, Supabase database, and a React + Vite + Tailwind + Cytoscape.js frontend dashboard. Objective is risk-ranked detection with measurable recall/precision by typology and explicit coverage tiers."
 todos:
   - id: scaffolding
     content: "Phase 1: Project scaffolding - backend (FastAPI structure, deps, config) + frontend (Vite + React + Tailwind + routing) + root files (docker-compose, .gitignore, Makefile, README)"
     status: pending
   - id: database
-    content: "Phase 2: Supabase migrations - all 9 migration files (transactions, wallets, edges, heuristic_results, transaction_scores, wallet_scores, network_cases, reports, RLS) + seed data"
+    content: "Phase 2: Supabase migrations - core + intelligence tables (transactions, wallets, edges, heuristic_results, transaction_scores, wallet_scores, network_cases, reports, document_events, entity_links, address_tags, model_metrics, threshold_policies, RLS) + seed data"
     status: pending
   - id: ingestion
     content: "Phase 3: Data ingestion pipeline - CSV upload, Elliptic loader, normalization, cleaning, wallet creation, Supabase persistence"
@@ -18,13 +18,13 @@ todos:
     content: "Phase 5: Feature engineering - transaction features, wallet/neighborhood features, subgraph/sequence features, combined feature matrix"
     status: pending
   - id: heuristics
-    content: "Phase 6: Heuristic engine - 185 typology-specific rule checks (traditional 1-90, blockchain 91-142, hybrid 143-155/176-185, AI-enabled 156-175/180), each returning triggered/confidence/explanation"
+    content: "Phase 6: Heuristic engine - 185 typology-specific rule checks (traditional 1-90, blockchain 91-142, AI-enabled 156-175, hybrid 143-155/176-185), each returning triggered/confidence/explanation + applicability + evidence"
     status: pending
   - id: lens-models
     content: "Phase 7: 6 Lens models - Behavioral (XGBoost+Autoencoder), Graph (GAT), Entity (Louvain/Leiden+clustering), Temporal (LSTM), Document (XGBoost+NLP), Off-ramp (XGBoost+classifier). Each consumes heuristic outputs + lens-specific features."
     status: pending
   - id: meta-model
-    content: "Phase 8: Meta-model - XGBoost meta-learner combining 6 lens scores + heuristic aggregates with calibration"
+    content: "Phase 8: Meta-model - XGBoost meta-learner combining 6 lens scores + anomaly signals + heuristic aggregates + data-availability flags with calibration and policy thresholds"
     status: pending
   - id: inference
     content: "Phase 9: Inference pipeline - heuristics-first then lens models, case assembly, explanation generation, SHAP"
@@ -36,12 +36,24 @@ todos:
     content: "Phase 11: Frontend dashboard - 6 pages (Dashboard, Transactions, Wallet, NetworkCases, FlowExplorer, Reports) + 8+ shared components + Cytoscape.js graph + heuristic display"
     status: pending
   - id: integration
-    content: "Phase 12: Integration and polish - metrics reporting, report generation, storage service, end-to-end testing"
+    content: "Phase 12: Integration and polish - metrics reporting, report generation, storage service, out-of-time validation, drift monitoring, and end-to-end testing"
     status: pending
 isProject: false
 ---
 
 # Aegis AML: Full Implementation Plan
+
+## Detection Objective and Non-Goal
+
+Primary objective: produce a **risk-ranked queue of suspicious activity** with measurable quality by typology and segment (asset, chain, customer class, jurisdiction).
+
+Explicit non-goal: "identify all money laundering cases." In AML this is not achievable; the system is judged by **coverage, recall, precision, and investigation efficiency** under uncertainty.
+
+Required operating targets (to be tuned per deployment cohort):
+- Typology-level recall floor and precision floor for high-priority typologies
+- False positives per 1,000 transactions ceiling by segment
+- Precision@K for analyst queue quality
+- Time-to-detection and time-to-investigate reduction
 
 ## Architecture Overview
 
@@ -116,11 +128,13 @@ flowchart LR
 
 The pipeline enforces a strict ordering:
 
-1. **Heuristics run first**: 185 typology-specific rules each check for one known laundering pattern and output a triggered flag, confidence score, and explanation string. These are deterministic and explainable.
+1. **Heuristics run first**: 185 typology-specific rules each check for one known laundering pattern and output a triggered flag, confidence score, applicability status, and explanation string. These are deterministic and explainable.
 2. **Lens models run second**: Each of the 6 lens models receives the heuristic output vector (185 scores) as additional input features alongside its own lens-specific features. This lets the models learn correlations between known patterns and also detect **novel patterns** not covered by the 185 heuristics.
 3. **Meta-model combines**: The 6 lens scores + aggregated heuristic signals feed the final XGBoost meta-learner.
 
 The 185 typologies are treated as a **known-pattern floor**, not a ceiling. The ML models exist specifically to catch what the heuristics miss.
+
+Critical guardrail: if required data for a heuristic is missing, the heuristic must return `applicability=inapplicable_missing_data` (never silent `false`). This prevents false confidence and preserves auditability.
 
 ---
 
@@ -157,7 +171,8 @@ The 185 typologies are treated as a **known-pattern floor**, not a ceiling. The 
   DOCUMENT_MODEL_PATH=./models/document/document_classifier.pkl
   OFFRAMP_MODEL_PATH=./models/offramp/offramp_classifier.pkl
   META_MODEL_PATH=./models/meta/meta_model.pkl
-  RISK_THRESHOLD=0.75
+  THRESHOLD_POLICY_PATH=./models/artifacts/threshold_config.json
+  FALLBACK_RISK_THRESHOLD=0.75
   NETWORK_HOPS=3
   ```
 
@@ -192,16 +207,21 @@ Create `supabase/config.toml` with project config.
 
 Create SQL migration files in `supabase/migrations/`:
 
-- **001_create_transactions.sql**: `transactions` table (id UUID PK, transaction_id TEXT UNIQUE, tx_hash TEXT, sender_wallet TEXT NOT NULL, receiver_wallet TEXT NOT NULL, amount NUMERIC NOT NULL, asset_type TEXT, timestamp TIMESTAMPTZ NOT NULL, fee NUMERIC, label TEXT, created_at TIMESTAMPTZ DEFAULT now()). Indexes on sender_wallet, receiver_wallet, timestamp, label.
-- **002_create_wallets.sql**: `wallets` table (id UUID PK, wallet_address TEXT UNIQUE NOT NULL, first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ, total_in NUMERIC DEFAULT 0, total_out NUMERIC DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now()). Index on wallet_address.
+- **001_create_transactions.sql**: `transactions` table (id UUID PK, transaction_id TEXT UNIQUE, tx_hash TEXT, sender_wallet TEXT NOT NULL, receiver_wallet TEXT NOT NULL, amount NUMERIC NOT NULL, asset_type TEXT, chain_id TEXT, timestamp TIMESTAMPTZ NOT NULL, fee NUMERIC, label TEXT, label_source TEXT, created_at TIMESTAMPTZ DEFAULT now()). Indexes on sender_wallet, receiver_wallet, timestamp, label.
+- **002_create_wallets.sql**: `wallets` table (id UUID PK, wallet_address TEXT UNIQUE NOT NULL, chain_id TEXT, first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ, total_in NUMERIC DEFAULT 0, total_out NUMERIC DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now()). Index on wallet_address.
 - **003_create_edges.sql**: `edges` table (id UUID PK, sender_wallet TEXT NOT NULL, receiver_wallet TEXT NOT NULL, transaction_id TEXT REFERENCES transactions(transaction_id), amount NUMERIC, timestamp TIMESTAMPTZ). Indexes on sender_wallet, receiver_wallet.
-- **004_create_heuristic_results.sql**: `heuristic_results` table (id UUID PK, transaction_id TEXT REFERENCES transactions(transaction_id), heuristic_vector JSONB NOT NULL, triggered_ids JSONB NOT NULL, triggered_count INT, top_typology TEXT, top_confidence FLOAT, explanations JSONB, scored_at TIMESTAMPTZ DEFAULT now()). UNIQUE on transaction_id. Index on triggered_count, top_typology. The `heuristic_vector` stores all 185 scores as a JSON array; `triggered_ids` stores only the IDs that fired; `explanations` maps triggered ID to explanation string.
-- **005_create_transaction_scores.sql**: `transaction_scores` (id UUID PK, transaction_id TEXT UNIQUE REFERENCES transactions(transaction_id), behavioral_score FLOAT, graph_score FLOAT, entity_score FLOAT, temporal_score FLOAT, document_score FLOAT, offramp_score FLOAT, meta_score FLOAT, predicted_label TEXT, explanation_summary TEXT, scored_at TIMESTAMPTZ DEFAULT now()). Note: columns now map to the 6 lenses, not the old specialist models.
+- **004_create_heuristic_results.sql**: `heuristic_results` table (id UUID PK, transaction_id TEXT REFERENCES transactions(transaction_id), heuristic_vector JSONB NOT NULL, applicability_vector JSONB NOT NULL, triggered_ids JSONB NOT NULL, triggered_count INT, top_typology TEXT, top_confidence FLOAT, explanations JSONB, scored_at TIMESTAMPTZ DEFAULT now()). UNIQUE on transaction_id. Index on triggered_count, top_typology. `heuristic_vector` stores 185 scores; `applicability_vector` stores per-typology applicability status.
+- **005_create_transaction_scores.sql**: `transaction_scores` (id UUID PK, transaction_id TEXT UNIQUE REFERENCES transactions(transaction_id), behavioral_score FLOAT, behavioral_anomaly_score FLOAT, graph_score FLOAT, entity_score FLOAT, temporal_score FLOAT, document_score FLOAT, offramp_score FLOAT, meta_score FLOAT, predicted_label TEXT, explanation_summary TEXT, scored_at TIMESTAMPTZ DEFAULT now()).
 - **006_create_wallet_scores.sql**: `wallet_scores` (id UUID PK, wallet_address TEXT UNIQUE REFERENCES wallets(wallet_address), risk_score FLOAT, fan_in_score FLOAT, fan_out_score FLOAT, velocity_score FLOAT, exposure_score FLOAT, scored_at TIMESTAMPTZ DEFAULT now())
 - **007_create_network_cases.sql**: `network_cases` (id UUID PK, case_name TEXT, typology TEXT, risk_score FLOAT, total_amount NUMERIC, start_time TIMESTAMPTZ, end_time TIMESTAMPTZ, explanation TEXT, graph_snapshot_path TEXT, created_at TIMESTAMPTZ DEFAULT now()) + junction table `network_case_wallets` (case_id UUID FK, wallet_address TEXT FK)
 - **008_create_reports.sql**: `reports` (id UUID PK, case_id UUID REFERENCES network_cases(id), title TEXT, report_path TEXT, generated_at TIMESTAMPTZ DEFAULT now())
-- **009_create_rls_policies.sql**: RLS policies for all tables (enable RLS, create policies for authenticated read/write)
-- **seed.sql**: Sample seed data for development (10-20 transactions, 5-10 wallets, sample heuristic results, sample scores)
+- **009_create_document_events.sql**: `document_events` (id UUID PK, entity_id TEXT, transaction_id TEXT NULL, doc_type TEXT, parsed_fields JSONB, quality_score FLOAT, created_at TIMESTAMPTZ DEFAULT now())
+- **010_create_entity_links.sql**: `entity_links` (id UUID PK, wallet_address TEXT, entity_id TEXT, link_type TEXT, link_strength FLOAT, source TEXT, created_at TIMESTAMPTZ DEFAULT now())
+- **011_create_address_tags.sql**: `address_tags` (id UUID PK, wallet_address TEXT, tag TEXT, tag_source TEXT, confidence FLOAT, valid_from TIMESTAMPTZ, valid_to TIMESTAMPTZ NULL)
+- **012_create_model_metrics.sql**: `model_metrics` (id UUID PK, model_name TEXT, cohort_key TEXT, metric_name TEXT, metric_value FLOAT, window_start TIMESTAMPTZ, window_end TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now())
+- **013_create_threshold_policies.sql**: `threshold_policies` (id UUID PK, cohort_key TEXT UNIQUE, alert_threshold FLOAT, case_threshold FLOAT, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())
+- **014_create_rls_policies.sql**: RLS policies for all tables (enable RLS, create policies for authenticated read/write)
+- **seed.sql**: Sample seed data for development (10-20 transactions, 5-10 wallets, sample heuristic results, sample scores, sample tags and entity links)
 
 ---
 
@@ -228,6 +248,22 @@ Create SQL migration files in `supabase/migrations/`:
 - Download/load `elliptic_txs_features.csv`, `elliptic_txs_edgelist.csv`, `elliptic_txs_classes.csv`
 - Map Elliptic columns to our schema (166 features -> our feature set, classes -> labels)
 - Store in Supabase and local `data/` folder
+
+### Data contract and coverage tiers (required)
+
+- Implement `backend/app/schemas/data_contract.py` with required/optional fields per lens:
+  - Tier 0 (on-chain only): transactions, wallets, edges, tags
+  - Tier 1 (on-chain + intelligence): + address tags, sanctions/exchange/ransomware lists
+  - Tier 2 (full hybrid): + KYC/entity links + document events
+- Implement `backend/app/services/data_availability_service.py` to emit per-record flags used in scoring.
+- Every inference result must include:
+  - `coverage_tier` (`tier0`, `tier1`, `tier2`)
+  - `applicability_summary` (how many of 185 rules were applicable vs inapplicable)
+  - `confidence_cap_reason` when key data is missing
+- Label governance in ingestion:
+  - store `label_source` (`elliptic`, `internal_sar`, `analyst_review`, `external_partner`)
+  - store `label_timestamp`
+  - block future-leaking labels during training split generation
 
 ---
 
@@ -271,12 +307,15 @@ Each heuristic returns:
 - `confidence`: float 0.0-1.0 (how strongly does the evidence match?)
 - `explanation`: string (plain-English reason, e.g. "14 sub-threshold transfers in 8 minutes")
 - `lens_tags`: list of which lenses this heuristic is relevant to (for routing to lens models)
+- `applicability`: enum (`applicable`, `inapplicable_missing_data`, `inapplicable_out_of_scope`)
+- `evidence`: structured dict with values used by the rule (counts, amounts, time windows, counterparties)
 
 ### File structure: `backend/app/ml/heuristics/`
 
 - `base.py` - Abstract `BaseHeuristic` class with `evaluate(tx, wallet, graph, features) -> HeuristicResult`
-- `registry.py` - Central registry that maps heuristic ID (1-185) to class, name, environment, lens tags. Also supports registering custom heuristics beyond 185 for extensibility.
+- `registry.py` - Central registry that maps heuristic ID (1-185) to class, name, environment, lens tags, data requirements, and supported coverage tiers. Also supports registering custom heuristics beyond 185 for extensibility.
 - `runner.py` - Execute all registered heuristics for a transaction/wallet, produce the full 185-score vector + triggered list + explanations dict. Handles parallelism and error isolation.
+- `completeness.py` - Validation contract: exactly 185 unique IDs, no overlap, no missing IDs, and environment mapping checksum.
 
 ### Heuristic modules by environment
 
@@ -313,7 +352,7 @@ All have direct on-chain detection logic:
 - #101-119 Change abuse, CoinJoin, mixers, privacy coins, bridges, DEX, etc.
 - #120-142 DEX wash pathing, flash loans, NFT wash sales, L2 hopping, DAO abuse, etc.
 
-**`hybrid.py`** - Patterns 143-155, 176-178, 183-185
+**`hybrid.py`** - Patterns 143-155, 176-185
 
 Cross-rail patterns where on-chain components are detectable:
 - #143 KYC-borrowed account cashout - identity mismatch patterns
@@ -322,9 +361,10 @@ Cross-rail patterns where on-chain components are detectable:
 - #176 Sanctions-evasion stablecoin corridor - exposure to sanctioned jurisdictions
 - #179 Ransomware proceeds layering - exposure to known ransomware wallets
 - #181 Darknet marketplace settlement - darknet cluster exposure
+- #180 Pig-butchering scam treasury - known scam cluster interactions + fiat cashout behavior
 - #184 Terror-finance micro-transfer webs - sparse but coordinated micro flows
 
-**`ai_enabled.py`** - Patterns 156-175, 180
+**`ai_enabled.py`** - Patterns 156-175
 
 Detect the behavioral signatures that AI-enabled laundering creates:
 - #161 Automated transaction scheduling - clockwork timing, 24/7 consistency
@@ -334,7 +374,15 @@ Detect the behavioral signatures that AI-enabled laundering creates:
 - #165 Autonomous cross-chain execution - complex multi-step flows with inhuman latency
 - #172 Adversarial behavior against AML models - behavioral drift after review events
 - #175 Multi-agent laundering workflow - distributed but coordinated indicators
-- #180 Pig-butchering scam treasury - known scam cluster interactions
+
+### Typology ownership contract (airtight mapping)
+
+- Traditional: 1-90
+- Blockchain: 91-142
+- Hybrid: 143-155 and 176-185
+- AI-enabled: 156-175
+
+No typology ID may belong to more than one environment module. Enforce this in CI via `completeness.py`.
 
 ### Common red flags (cross-cutting, Section 6 of atlas)
 
@@ -359,6 +407,7 @@ Each lens model receives two categories of input:
 2. **Lens-specific engineered features**: From Phase 5 feature engineering
 
 Each lens model is designed to catch **both** known patterns (boosted by heuristic signals) **and** novel patterns (learned from feature distributions).
+Each lens also receives `data_availability_flags` so missing off-chain data does not masquerade as "clean" behavior.
 
 ### Lens-to-Heuristic Tag Mapping
 
@@ -413,6 +462,8 @@ Each of the 185 heuristics is tagged with one or more lenses it's relevant to. T
 
 **Outputs**: entity_score (float), cluster_id, cluster_risk_score
 
+Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score` with downgraded confidence and sets `entity_lens_mode=limited`.
+
 **Files**:
 - `backend/app/ml/lenses/entity_model.py`
 - `backend/app/services/clustering_service.py` - Louvain/Leiden + DBSCAN
@@ -445,6 +496,7 @@ Each of the 185 heuristics is tagged with one or more lenses it's relevant to. T
 - Heuristic scores tagged "document" (e.g. #28 shell-company invoices, #41-55 trade-based patterns, #156 synthetic identity, #160 AI-written invoices, #168 document laundering via image models, #171 synthetic beneficial-owner narratives)
 - Document features: metadata consistency scores, narrative complexity metrics, template repetition detection
 - Note: This lens activates fully when off-chain document data is provided. With on-chain only data, it operates in reduced mode using transaction metadata patterns.
+ - In reduced mode, cap document contribution in the meta-model and expose `document_lens_mode=limited` in explanations.
 
 **Outputs**: document_score (float)
 
@@ -485,11 +537,15 @@ Each typology maps to one or more lenses. Examples:
 ## Phase 8: Meta-Model (Layer B)
 
 - `backend/app/ml/train_meta.py` - XGBoost meta-learner
-  - Inputs (12 features):
+  - Inputs (19 features):
     - 6 lens scores: behavioral_score, graph_score, entity_score, temporal_score, document_score, offramp_score
-    - Heuristic aggregates: total_triggered_count, max_heuristic_confidence, behavioral_heuristic_mean, graph_heuristic_mean, temporal_heuristic_mean, offramp_heuristic_mean
+    - 1 anomaly signal: behavioral_anomaly_score
+    - Heuristic aggregates: total_triggered_count, max_heuristic_confidence, behavioral_heuristic_mean, graph_heuristic_mean, entity_heuristic_mean, temporal_heuristic_mean, document_heuristic_mean, offramp_heuristic_mean
+    - Applicability aggregates: applicable_rule_count, inapplicable_rule_count
+    - Data availability flags: has_entity_intel, has_document_intel
   - Output: final risk probability + predicted label
-  - Calibration with Platt scaling
+  - Calibration with Platt scaling or isotonic calibration (choose best on validation)
+  - Threshold policy learned per cohort (chain, asset, customer segment) and written to threshold policy artifact/table
   - Save artifacts:
     - `models/meta/meta_model.pkl` - trained meta-model
     - `models/artifacts/threshold_config.json` - risk threshold configuration
@@ -502,18 +558,19 @@ Each typology maps to one or more lenses. Examples:
 
 - `backend/app/ml/infer_pipeline.py` - End-to-end scoring with strict ordering:
   1. Load all models + heuristic registry
-  2. Compute features for new data
+  2. Compute features for new data + data availability flags
   3. **Step 1**: Run all 185 heuristics -> produce heuristic vector, triggered list, explanations
   4. **Step 2**: Run each lens model (heuristic outputs + lens features as input)
   5. **Step 3**: Stack lens outputs into meta-model
-  6. Output: transaction risk, wallet risk, cluster risk, full heuristic report
+  6. **Step 4**: Apply threshold policy by cohort (`threshold_policies` table, fallback to artifact, final fallback env value)
+  7. Output: transaction risk, wallet risk, cluster risk, full heuristic report, coverage tier, uncertainty flags
 
 - `backend/app/services/scoring_service.py` - Orchestrate inference, write heuristic results + scores to Supabase
 - `backend/app/services/investigation_service.py` - Network case assembly:
   - Expand k-hops from high-risk nodes
   - Search shared neighbors, detect motifs
   - Identify cluster boundaries
-  - Generate "case" record with attached heuristic evidence
+  - Generate "case" record with attached heuristic evidence + explicit rationale for why policy threshold was crossed
 
 - `backend/app/services/explanation_service.py` - For each case:
   - Which heuristics fired and with what confidence
@@ -536,6 +593,8 @@ All routes in `backend/app/api/`:
 - **routes_networks.py**: `GET /api/networks`, `GET /api/networks/{id}`, `GET /api/networks/{id}/graph`, `POST /api/networks/detect`
 - **routes_explanations.py**: `GET /api/explanations/{transaction_id}`, `GET /api/explanations/case/{case_id}`
 - **routes_reports.py**: `GET /api/reports`, `POST /api/reports/generate/{case_id}`, `GET /api/reports/{id}/download`
+- **routes_metrics.py** (new): `GET /api/metrics/typology`, `GET /api/metrics/cohort`, `GET /api/metrics/drift`
+- **routes_policies.py** (new): `GET /api/policies/thresholds`, `PUT /api/policies/thresholds/{cohort_key}`
 
 Pydantic schemas in `backend/app/schemas/` for all request/response models. Add `heuristic.py` schema for heuristic results.
 Repository layer in `backend/app/repositories/` for Supabase queries. Add `heuristics_repo.py`.
@@ -586,6 +645,7 @@ Repository layer in `backend/app/repositories/` for Supabase queries. Add `heuri
 
 Classification metrics:
 - Precision, Recall, F1, PR-AUC, ROC-AUC, confusion matrix, balanced accuracy, MCC
+- Precision/Recall with confidence intervals (bootstrap)
 
 Ranking metrics:
 - Precision@K, Recall@K, Top-K hit rate
@@ -596,7 +656,19 @@ Graph/case metrics:
 Investigation usefulness metrics (for demo reporting):
 - Number of risky cases surfaced, average explanation coverage, reduction in analyst search space, percentage of cases with traceable source-to-destination path
 
-Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, time-to-investigate improvement.
+Governance metrics (required for production posture):
+- Typology-level recall and precision table (all 185 IDs; explicit N/A when inapplicable)
+- Segment/cohort metrics (by chain, asset type, customer type, jurisdiction)
+- Calibration error (ECE/Brier) and threshold stability by cohort
+- Drift metrics (PSI/feature drift, label drift) with alert thresholds
+
+Performance gates (must pass before promoting models):
+- High-priority typology recall floor met
+- False positives per 1,000 transactions below cohort policy ceiling
+- Calibration error below target
+- No critical regression against previous champion model
+
+Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, and measurable time-to-investigate improvement with explicit uncertainty disclosure.
 
 ### Services
 
@@ -608,16 +680,22 @@ Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, time-to-investig
 - `test_ingest.py` - CSV parsing, schema validation, deduplication
 - `test_features.py` - Feature computation correctness
 - `test_graph.py` - Graph construction, k-hop expansion
-- `test_heuristics.py` - All 185 heuristic rules trigger correctly on known patterns, registry completeness, runner error isolation
+- `test_heuristics.py` - All 185 heuristic rules trigger correctly on known patterns, registry completeness, runner error isolation, no duplicated/missing typology IDs
 - `test_lenses.py` - Each lens model produces valid scores, accepts heuristic input correctly
 - `test_scoring.py` - Full pipeline inference (heuristics -> lenses -> meta), meta-model stacking
 - `test_api.py` - API endpoint integration tests including heuristic endpoints
+- `test_data_contract.py` - Coverage tier assignment and missing-data applicability behavior
+- `test_threshold_policy.py` - Policy precedence (`threshold_policies` -> artifact -> fallback env)
+- `test_leakage.py` - Time-split integrity, no future feature leakage, no target leakage in engineered features
+- `test_eval_protocol.py` - Out-of-time and out-of-entity validation pipeline correctness
+- `test_drift_monitoring.py` - Drift detection and alerting path
 
 ### Integration
 
 - Connect all frontend pages to live API endpoints
 - End-to-end test: CSV upload -> scoring -> case generation -> visualization
 - Verify Supabase storage bucket operations (upload raw CSV, download report)
+- Champion/challenger run: compare current production model vs new candidate on the same holdout and produce promotion decision report
 
 ---
 
@@ -633,25 +711,28 @@ Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, time-to-investig
 - **Community detection**: python-louvain + leidenalg (entity lens)
 - **Heuristic engine**: 185 typology-specific rules from Money Laundering Typologies Atlas, extensible registry
 - **Explainability**: SHAP for XGBoost models, template-based for heuristics, lens contribution breakdown
+- **Detection target**: risk-ranked suspicious activity, not exhaustive laundering capture
+- **Threshold governance**: cohort-based threshold policies with explicit fallback chain and audit trail
+- **Validation protocol**: out-of-time + out-of-entity evaluation, typology-level scorecards, drift monitoring
 - **Dataset**: Elliptic Bitcoin Dataset + custom CSV support
 
 ---
 
 ## Complete File Manifest
 
-Total files to create: ~100+
+Total files to create: ~115+
 
 **Backend** (65+ files):
 - `backend/app/`: main.py, config.py, supabase_client.py, dependencies.py
-- `backend/app/api/`: routes_ingest.py, routes_transactions.py, routes_wallets.py, routes_heuristics.py, routes_networks.py, routes_explanations.py, routes_reports.py
-- `backend/app/schemas/`: transaction.py, wallet.py, heuristic.py, network_case.py, explanation.py, report.py
-- `backend/app/services/`: ingest_service.py, cleaning_service.py, feature_service.py, graph_service.py, scoring_service.py, explanation_service.py, clustering_service.py, investigation_service.py, report_service.py, storage_service.py
+- `backend/app/api/`: routes_ingest.py, routes_transactions.py, routes_wallets.py, routes_heuristics.py, routes_networks.py, routes_explanations.py, routes_reports.py, routes_metrics.py, routes_policies.py
+- `backend/app/schemas/`: transaction.py, wallet.py, heuristic.py, network_case.py, explanation.py, report.py, data_contract.py
+- `backend/app/services/`: ingest_service.py, cleaning_service.py, feature_service.py, graph_service.py, scoring_service.py, explanation_service.py, clustering_service.py, investigation_service.py, report_service.py, storage_service.py, data_availability_service.py
 - `backend/app/repositories/`: transactions_repo.py, wallets_repo.py, heuristics_repo.py, scores_repo.py, network_cases_repo.py, reports_repo.py
-- `backend/app/ml/heuristics/`: base.py, registry.py, runner.py, traditional.py, blockchain.py, hybrid.py, ai_enabled.py, common_red_flags.py
+- `backend/app/ml/heuristics/`: base.py, registry.py, runner.py, completeness.py, traditional.py, blockchain.py, hybrid.py, ai_enabled.py, common_red_flags.py
 - `backend/app/ml/lenses/`: behavioral_model.py, graph_model.py, entity_model.py, temporal_model.py, document_model.py, offramp_model.py
 - `backend/app/ml/`: train_meta.py, infer_pipeline.py, graph_features.py, transaction_features.py, subgraph_features.py, explainers.py
 - `backend/app/utils/`: logger.py, time_utils.py, graph_utils.py, file_utils.py, metrics.py
-- `backend/tests/`: test_ingest.py, test_features.py, test_graph.py, test_heuristics.py, test_scoring.py, test_api.py, test_lenses.py
+- `backend/tests/`: test_ingest.py, test_features.py, test_graph.py, test_heuristics.py, test_scoring.py, test_api.py, test_lenses.py, test_data_contract.py, test_threshold_policy.py, test_leakage.py, test_eval_protocol.py, test_drift_monitoring.py
 - `backend/`: requirements.txt, Dockerfile, .env.example
 
 **Frontend** (30+ files):
@@ -664,9 +745,9 @@ Total files to create: ~100+
 - `frontend/src/utils/`: formatters.ts, graphTransform.ts
 - `frontend/`: package.json, vite.config.ts, tailwind.config.js, tsconfig.json
 
-**Supabase** (11 files):
+**Supabase** (16 files):
 - `supabase/`: config.toml, seed.sql
-- `supabase/migrations/`: 001 through 009 .sql files
+- `supabase/migrations/`: 001 through 014 .sql files
 
 **Model directories** (with .gitkeep):
 - `models/behavioral/`, `models/graph/`, `models/entity/`, `models/temporal/`, `models/document/`, `models/offramp/`, `models/meta/`, `models/artifacts/`
