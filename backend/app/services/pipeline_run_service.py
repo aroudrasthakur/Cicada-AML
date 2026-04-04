@@ -49,6 +49,62 @@ def _load_suspicious_threshold() -> float:
     return 0.5
 
 
+def _label_indicates_suspicion(tx: dict | None) -> bool:
+    """True when the row label marks known-bad or review (training / demo CSVs)."""
+    if not tx:
+        return False
+    raw = tx.get("label")
+    if raw is None or (isinstance(raw, float) and np.isnan(raw)):
+        return False
+    s = str(raw).strip().lower()
+    if s in ("illicit", "fraud", "suspicious", "malicious", "scam", "true", "1", "yes"):
+        return True
+    return "illicit" in s or "fraud" in s or "suspic" in s
+
+
+def _collect_suspicious_transactions(
+    results: list[dict],
+    decision_threshold: float,
+    tx_by_id: dict[str, dict],
+    *,
+    min_heuristic_confidence: float = 0.15,
+) -> list[dict]:
+    """Flag transactions for clustering and reporting.
+
+    The infer pipeline assigns ``medium-low`` when ``low_risk_ceiling < meta < decision_threshold``.
+    Older code only flagged ``medium``/``high`` or ``meta >= threshold``, which **dropped every
+    medium-low row** when the trained decision threshold was high (common for recall-first meta
+    training). That produced **zero** suspicious rows while many txs were still elevated.
+
+    We therefore treat as suspicious:
+    - ``meta_score >= decision_threshold``
+    - any non-low risk band (``high``, ``medium``, ``medium-low``)
+    - rows with illicit/suspicious labels in the source CSV
+    - rows with at least one fired heuristic and non-trivial top confidence
+    """
+    suspicious: list[dict] = []
+    for r in results:
+        meta = float(r.get("meta_score") or 0)
+        level = str(r.get("risk_level") or "")
+        tid = str(r.get("transaction_id", ""))
+
+        if meta >= decision_threshold:
+            suspicious.append(r)
+            continue
+        if level in ("high", "medium", "medium-low"):
+            suspicious.append(r)
+            continue
+        if _label_indicates_suspicion(tx_by_id.get(tid)):
+            suspicious.append(r)
+            continue
+        trig = int(r.get("heuristic_triggered_count") or 0)
+        top_c = float(r.get("heuristic_top_confidence") or 0)
+        if trig > 0 and top_c >= min_heuristic_confidence:
+            suspicious.append(r)
+
+    return suspicious
+
+
 def _update(run_id: str, pct: int, **kw: Any) -> None:
     runs_repo.update_run_status(run_id, "running", progress_pct=pct, **kw)
 
@@ -106,13 +162,10 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
 
         # ---- 6. Identify suspicious transactions -----------------------------
         threshold = _load_suspicious_threshold()
-        suspicious = [
-            r for r in results
-            if (r.get("meta_score") or 0) >= threshold
-            or r.get("risk_level") in ("medium", "high")
-        ]
+        tx_by_id = {str(t.get("transaction_id", "")): t for t in transactions_dicts}
+        suspicious = _collect_suspicious_transactions(results, threshold, tx_by_id)
         logger.info(
-            "Run %s: %d/%d transactions flagged suspicious (threshold=%.6f)",
+            "Run %s: %d/%d transactions flagged suspicious (decision_threshold=%.6f)",
             run_id, len(suspicious), len(results), threshold,
         )
         _update(run_id, 80)
