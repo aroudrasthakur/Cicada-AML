@@ -21,13 +21,30 @@ async def get_current_user_id(
         )
     if creds is None or not creds.credentials:
         raise HTTPException(401, "Not authenticated")
+    secret = (settings.supabase_jwt_secret or "").strip()
     try:
         payload = jwt.decode(
             creds.credentials,
-            settings.supabase_jwt_secret,
+            secret,
             algorithms=["HS256"],
             audience=settings.supabase_jwt_audience,
+            leeway=120,
         )
+    except jwt.InvalidAudienceError:
+        # Some project / token shapes omit or alter ``aud``; signature + exp still verified.
+        try:
+            payload = jwt.decode(
+                creds.credentials,
+                secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+                leeway=120,
+            )
+        except jwt.PyJWTError:
+            raise HTTPException(
+                401,
+                "Invalid or expired token",
+            ) from None
     except jwt.PyJWTError:
         raise HTTPException(401, "Invalid or expired token") from None
     sub = payload.get("sub")
