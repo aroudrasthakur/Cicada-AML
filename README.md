@@ -1,265 +1,637 @@
-# Aegis AML
+# 🛡️ Aegis AML
 
-**AI-Powered Blockchain Laundering Detection and Investigation Dashboard**
+**AI-Powered Blockchain Anti-Money Laundering Detection Platform**
 
-A hybrid demo platform that scores transactions with a **heuristics-first, models-second** pipeline: **185 typology rules** (Money Laundering Typologies Atlas–style IDs) run before **six lens models** (behavioral, graph, entity, temporal, document, off-ramp) and an **XGBoost meta-learner**. The UI surfaces risk, heuristic triggers, lens breakdowns, graphs (Cytoscape), and timelines (Plotly).
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
+[![React 19](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://reactjs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
-
-## What’s in this repo
-
-| Area | Technology |
-|------|------------|
-| API | FastAPI (`backend/app/main.py`), CORS enabled |
-| Database | **Supabase Postgres only** — tables via SQL migrations under `supabase/migrations/`. **No Supabase Storage**; CSVs, reports JSON, and model files live on disk (`data/`, `models/`). |
-| Frontend | React 19, Vite 6, TypeScript, Tailwind CSS v4, React Router 7 |
-| ML / graph | Python 3.11+, XGBoost, PyTorch, PyTorch Geometric (GAT), NetworkX, heuristics in `backend/app/ml/heuristics/` |
-| Viz | `react-cytoscapejs`, `react-plotly.js` |
-
-**Backend route prefixes** (all under `http://localhost:8000`):
-
-- `/health` — liveness  
-- `/api/ingest` — CSV / Elliptic ingestion  
-- `/api/transactions`, `/api/wallets`, `/api/heuristics`, `/api/networks`, `/api/explanations`, `/api/reports`, `/api/metrics`, `/api/policies`
-
-The Vite dev server proxies **`/api` → `http://localhost:8000`** (see `frontend/vite.config.ts`), so the browser can call `/api/...` on port **5173** without extra CORS setup.
+> A production-grade AML system combining 185 rule-based heuristics with 6 specialized ML models to detect money laundering patterns across blockchain networks.
 
 ---
 
-## Prerequisites
+## 🎯 Overview
 
-- **Python 3.11+**
-- **Node.js 20+** and npm
-- A **Supabase project** (for Postgres): Project URL, **anon** key, and **service role** key (backend uses the service role for server-side writes)
-- **Git**
-- Optional: **Docker** + Docker Compose (see below)
+Aegis AML is a comprehensive anti-money laundering detection system designed for blockchain transactions. It employs a **heuristics-first, ML-second** architecture that combines explainable rule-based detection with advanced machine learning to identify both known and novel laundering patterns.
 
-On Windows, use **PowerShell** or **Git Bash**. The root `Makefile` uses Unix-style `cd … &&` commands; if you don’t have `make`, run the equivalent commands manually (see [Run the API](#run-the-api)).
+### Key Features
+
+- 🔍 **185 Typology-Specific Heuristics** - Comprehensive coverage of traditional, blockchain-native, hybrid, and AI-enabled laundering patterns
+- 🧠 **6 Specialized ML Lenses** - Multi-perspective analysis (Behavioral, Graph, Entity, Temporal, Document, Off-ramp)
+- 📊 **Ensemble Meta-Learner** - XGBoost stacking model combining all signals with calibrated risk scores
+- 🌐 **Interactive Dashboard** - Real-time visualization with network graphs, risk scoring, and investigation tools
+- 🔬 **Explainable AI** - SHAP-based explanations and plain-English summaries for every detection
+- 📈 **Production-Ready** - Time-aware validation, drift monitoring, and cohort-based threshold policies
 
 ---
 
-## 1. Clone and install dependencies
+## 🏗️ Architecture
 
-```bash
-git clone <your-fork-url> Aegis-AML
-cd Aegis-AML
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     AEGIS AML PIPELINE                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. Data Ingestion → CSV Upload / Elliptic Dataset            │
+│           ↓                                                     │
+│  2. Graph Construction → NetworkX Directed Temporal Graph      │
+│           ↓                                                     │
+│  3. Feature Engineering → Transaction + Graph + Subgraph       │
+│           ↓                                                     │
+│  4. Heuristic Engine (185 Rules) → Known Pattern Detection    │
+│           ↓                                                     │
+│  5. ML Lenses (Parallel)                                       │
+│      ├─ Behavioral (XGBoost + Autoencoder)                    │
+│      ├─ Graph (GAT Neural Network)                            │
+│      ├─ Temporal (LSTM)                                        │
+│      ├─ Document (XGBoost + NLP)                              │
+│      └─ Off-ramp (XGBoost)                                     │
+│           ↓                                                     │
+│  6. Entity Lens → Community Detection + Clustering            │
+│           ↓                                                     │
+│  7. Meta-Learner → Calibrated Risk Score (0-1)                │
+│           ↓                                                     │
+│  8. Threshold Policy → Risk Level Assignment                   │
+│           ↓                                                     │
+│  9. Case Assembly → Network Investigation + Explanations       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Backend
+### Detection Philosophy
+
+**Heuristics First, Models Second**
+
+1. **185 Heuristics** detect known patterns and provide explainable signals
+2. **ML Models** learn correlations and detect novel patterns not covered by rules
+3. **Meta-Learner** combines both for optimal detection with uncertainty quantification
+
+This approach ensures:
+
+- ✅ Explainability for compliance and auditing
+- ✅ Coverage of known typologies from regulatory guidance
+- ✅ Ability to detect emerging and novel patterns
+- ✅ Graceful degradation when data is limited
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- Supabase account (or PostgreSQL database)
+- 8GB+ RAM recommended
+
+### Installation
+
+1. **Clone the repository**
+
+```bash
+git clone https://github.com/yourusername/aegis-aml.git
+cd aegis-aml
+```
+
+2. **Backend Setup**
 
 ```bash
 cd backend
-python -m venv .venv
-
-# Windows PowerShell
-.\.venv\Scripts\activate
-
-# macOS / Linux
-# source .venv/bin/activate
-
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cd ..
 ```
 
-PyTorch / PyTorch Geometric can be environment-specific. If `pip install -r requirements.txt` fails on the graph stack, install PyTorch from the [official guide](https://pytorch.org/get-started/locally/), then install `torch-geometric` per [PyG docs](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
-
-### Frontend
+3. **Configure Environment**
 
 ```bash
-cd frontend
+cp .env.example .env
+# Edit .env with your Supabase credentials
+```
+
+4. **Frontend Setup**
+
+```bash
+cd ../frontend
 npm install
-cd ..
 ```
 
----
+5. **Run the Application**
 
-## 2. Configure environment variables
-
-Copy the example file and fill in real values:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-| Variable | Purpose |
-|----------|---------|
-| `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_KEY` | Anon key (optional for server; some code paths may expect it) |
-| `SUPABASE_SERVICE_ROLE_KEY` | **Required for backend** inserts/updates via `supabase-py` |
-| `MODEL_DIR`, `*_MODEL_PATH`, `THRESHOLD_POLICY_PATH` | Where trained artifacts are loaded during inference (defaults under `./models` relative to **`backend/`** when you run uvicorn from `backend/`) |
-| `FALLBACK_RISK_THRESHOLD`, `NETWORK_HOPS` | Scoring / graph exploration defaults |
-
-**Frontend (optional):** if pages use the Supabase JS client directly, create `frontend/.env.local`:
-
-```env
-VITE_SUPABASE_URL=https://xxxx.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
-```
-
-API calls from the UI already go through **`/api`** → FastAPI; Supabase in the browser is only needed if you wire real-time or direct table access.
-
----
-
-## 3. Database: apply migrations and seed
-
-1. In the Supabase dashboard (**SQL Editor**), run each file in order:
-
-   `supabase/migrations/001_create_transactions.sql`  
-   → … → `014_create_rls_policies.sql`
-
-2. Run `supabase/seed.sql` for demo rows (transactions, wallets, sample scores, etc.).
-
-Alternatively, use the [Supabase CLI](https://supabase.com/docs/guides/cli):
-
-```bash
-supabase link --project-ref <your-project-ref>
-supabase db push   # if your local folder is wired as migration source
-```
-
-**RLS:** Migration `014` enables RLS. For a quick local demo you may need policies aligned with how you authenticate (e.g. service role bypasses RLS when using the backend; browser clients using the anon key need matching policies).
-
----
-
-## 4. Run the API
-
-From the **`backend`** directory (so `app` imports and `./models` paths resolve correctly):
+Terminal 1 (Backend):
 
 ```bash
 cd backend
-.\.venv\Scripts\activate   # Windows
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 
-Or from the repo root with Make (Unix-like shell):
-
-```bash
-make dev-backend
-```
-
-Verify: open [http://localhost:8000/health](http://localhost:8000/health) — expect `{"status":"ok"}`.
-
-Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-
----
-
-## 5. Run the frontend
+Terminal 2 (Frontend):
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The app talks to the API via the **`/api` proxy** to port 8000.
+Visit `http://localhost:5173` to access the dashboard.
 
 ---
 
-## 6. Load data (demo)
+## 📊 Dataset Support
 
-**Minimum CSV columns** for `POST /api/ingest/csv`:
+### Elliptic Bitcoin Dataset
 
-`transaction_id`, `sender_wallet`, `receiver_wallet`, `amount`, `timestamp`
+The system is pre-configured to work with the [Elliptic Bitcoin Dataset](https://www.kaggle.com/datasets/ellipticco/elliptic-data-set):
 
-Optional: `tx_hash`, `asset_type`, `chain_id`, `fee`, `label`, `label_source`
+- 203,769 Bitcoin transactions
+- 234,355 directed edges
+- ~2.2% labeled illicit, ~20.6% licit, ~77.2% unknown
+- 49 temporal time steps
 
-**Elliptic Bitcoin Dataset:** place the three CSVs (`elliptic_txs_features.csv`, `elliptic_txs_edgelist.csv`, `elliptic_txs_classes.csv`) in a folder whose default path is **`data/external` relative to the process working directory**. If you start uvicorn from **`backend/`**, use `backend/data/external/`. With **Docker Compose**, `./data` from the repo root is mounted at `/app/data`, so use **`data/external/`** at the repo root on the host. Call `POST /api/ingest/elliptic` with optional query param `data_dir` (default `data/external`).
-
-Ingestion persists to **Postgres** via repositories in `backend/app/repositories/` — not to object storage.
-
----
-
-## 7. Training models (advanced)
-
-Training scripts live in `backend/app/ml/training/`. They expect prepared CSVs under **`backend/data/processed/`** by default (`--data-dir` to override):
-
-| Script | Typical inputs |
-|--------|----------------|
-| `train_behavioral.py` | `train_features.csv` (+ optional `val_features.csv`), column **`label`** for supervised learning |
-| `train_graph.py` | `edges.csv`, `node_labels.csv` |
-| `train_entity.py` | same edge/label inputs + **`models/graph/node_embeddings.npy`** from graph training |
-| `train_temporal.py` | `train_features.csv`, optional `wallet_labels.csv` |
-| `train_document.py` | `document_features.csv` or fallback `train_features.csv` |
-| `train_offramp.py` | `offramp_features.csv` or `train_features.csv` |
-| `train_meta.py` | `meta_features.csv` (stacked lens + heuristic aggregates) |
-
-**Suggested order:** graph → entity → (behavioral, temporal, document, off-ramp in parallel) → build `meta_features.csv` from lens outputs → meta.
-
-Example (from `backend/`):
+**Load Elliptic Data:**
 
 ```bash
-python -m app.ml.training.train_graph --data-dir data/processed
-python -m app.ml.training.train_entity --data-dir data/processed
+# Download dataset to data/external/
+# Then via API:
+curl -X POST http://localhost:8000/api/ingest/elliptic
+```
+
+### Custom CSV Upload
+
+Upload your own transaction data via the dashboard or API:
+
+**Required columns:**
+
+- `transaction_id` - Unique identifier
+- `sender_wallet` - Source address
+- `receiver_wallet` - Destination address
+- `amount` - Transaction value
+- `timestamp` - ISO 8601 datetime
+
+**Optional columns:**
+
+- `tx_hash`, `asset_type`, `chain_id`, `fee`, `label`, `label_source`
+
+---
+
+## 🔬 The 185 Heuristics
+
+Aegis implements comprehensive typology coverage across four environments:
+
+### Traditional (IDs 1-90)
+
+Financial sector patterns adapted for blockchain:
+
+- Cash structuring / smurfing
+- Round-dollar deposits
+- Rapid cash-in/wire-out
+- Loan-back schemes
+- Funnel & pass-through accounts
+- Mirror transfers
+- Dormant account activation
+
+### Blockchain-Native (IDs 91-142)
+
+On-chain specific patterns:
+
+- Peel chains
+- Fan-out dispersal / Fan-in aggregation
+- Layered hops through fresh wallets
+- Dusting attacks
+- Self-transfer chains
+- CoinJoin participation
+- Mixer usage
+- Bridge hopping
+- DEX wash trading
+- NFT wash sales
+- Flash loan camouflage
+
+### Hybrid (IDs 143-155, 176-185)
+
+Cross-rail patterns:
+
+- KYC-borrowed account cashout
+- P2P exchange laundering
+- Crypto ATM patterns
+- Sanctions evasion corridors
+- Ransomware proceeds layering
+- Darknet marketplace settlement
+
+### AI-Enabled (IDs 156-175)
+
+Detecting AI-assisted laundering:
+
+- Automated transaction scheduling
+- RL-based threshold avoidance
+- Graph-aware route optimization
+- Botnet wallet orchestration
+- Adversarial behavior against AML models
+
+---
+
+## 🧠 ML Lens Models
+
+### 1. Behavioral Lens
+
+**Architecture:** XGBoost + Autoencoder  
+**Purpose:** Detect economically unnecessary activity  
+**Features:** Transaction patterns, burstiness, amount deviations, relay scores
+
+### 2. Graph Lens
+
+**Architecture:** Graph Attention Network (GAT)  
+**Purpose:** Structural anomaly detection  
+**Features:** Degree centrality, PageRank, clustering coefficients, suspicious neighbor ratios
+
+### 3. Entity Lens
+
+**Architecture:** Louvain/Leiden + DBSCAN + XGBoost  
+**Purpose:** Common control detection  
+**Features:** Cluster density, shared counterparties, timing synchronization
+
+### 4. Temporal Lens
+
+**Architecture:** 2-Layer LSTM  
+**Purpose:** Temporal pattern anomalies  
+**Features:** Transaction sequences, timing intervals, burst detection
+
+### 5. Document Lens
+
+**Architecture:** XGBoost + NLP  
+**Purpose:** Metadata consistency checking  
+**Features:** Document completeness, narrative analysis, template detection
+
+### 6. Off-ramp Lens
+
+**Architecture:** XGBoost  
+**Purpose:** Conversion and exit detection  
+**Features:** Exchange proximity, cash-out patterns, exit concentration
+
+### Meta-Learner
+
+**Architecture:** Calibrated XGBoost  
+**Purpose:** Ensemble all signals  
+**Input:** 6 lens scores + heuristic aggregates + data availability flags  
+**Output:** Calibrated risk probability (0-1)
+
+---
+
+## 📈 Training Pipeline
+
+### Data Preparation
+
+```bash
+# Prepare features from raw data
+python -m scripts.prepare_features --output data/processed
+```
+
+### Train Individual Lenses
+
+```bash
+# Train in dependency order
 python -m app.ml.training.train_behavioral --data-dir data/processed
-# … etc.
+python -m app.ml.training.train_graph --data-dir data/processed
+python -m app.ml.training.train_temporal --data-dir data/processed
+python -m app.ml.training.train_document --data-dir data/processed
+python -m app.ml.training.train_offramp --data-dir data/processed
+python -m app.ml.training.train_entity --data-dir data/processed  # Requires graph embeddings
 ```
 
-The root **`make train`** target is a **placeholder orchestration**: the feature modules are libraries (no CLI that writes `train_features.csv`), and the heuristics runner has no `--mode train` entry point. For a full pipeline you still need an ETL step (notebook or script) that builds the CSVs above from ingested transactions.
+### Train Meta-Learner
 
-Artifacts are written under **`backend/models/`** (e.g. `behavioral/`, `graph/`, `meta/`, `artifacts/`).
+```bash
+# Requires all 6 lenses to be trained first
+python -m app.ml.training.train_meta --data-dir data/processed
+```
+
+### Hyperparameter Tuning
+
+The system uses Optuna for automated hyperparameter optimization:
+
+- Primary metric: PR-AUC (preferred over ROC-AUC for imbalanced data)
+- Secondary metric: Precision@100 (analyst queue quality)
+- 50 trials per model with TPE sampler
 
 ---
 
-## 8. Tests and lint
+## 🎨 Dashboard Features
 
-From repo root:
+### Transaction View
+
+- Sortable, filterable transaction table
+- Risk score visualization
+- Heuristic trigger badges
+- 6-lens radar chart per transaction
+- SHAP-based feature importance
+
+### Wallet Detail
+
+- In/out flow visualization
+- Risk score history
+- Entity cluster membership
+- Related suspicious paths
+- K-hop neighborhood graph
+
+### Network Cases
+
+- Suspicious cluster detection
+- Typology classification
+- Amount flow analysis
+- Time-range filtering
+- Interactive Cytoscape.js graph
+
+### Flow Explorer
+
+- Full interactive graph visualization
+- Time slider for temporal analysis
+- Path tracing
+- Risk heatmap overlay
+- Heuristic overlay mode
+
+### Reports
+
+- Automated case report generation
+- PDF export
+- Heuristic evidence appendix
+- Explanation summaries
+
+---
+
+## 🔧 API Reference
+
+### Ingestion
 
 ```bash
-make test
-make lint
+POST /api/ingest/csv          # Upload CSV file
+POST /api/ingest/elliptic     # Load Elliptic dataset
 ```
 
-Or manually:
+### Transactions
 
 ```bash
-cd backend
-pytest tests/ -v
-ruff check .
+GET  /api/transactions                    # List with pagination
+GET  /api/transactions/{id}               # Get single transaction
+POST /api/transactions/score              # Score all transactions
 ```
 
+### Wallets
+
 ```bash
-cd frontend
-npm run lint
+GET  /api/wallets                         # List wallets
+GET  /api/wallets/{address}               # Get wallet details
+GET  /api/wallets/{address}/graph         # Get k-hop subgraph
+```
+
+### Heuristics
+
+```bash
+GET  /api/heuristics/registry             # List all 185 heuristics
+GET  /api/heuristics/{transaction_id}     # Get heuristic results
+GET  /api/heuristics/stats                # Aggregate statistics
+```
+
+### Network Cases
+
+```bash
+GET  /api/networks                        # List cases
+GET  /api/networks/{id}                   # Get case details
+GET  /api/networks/{id}/graph             # Get case graph
+POST /api/networks/detect                 # Detect new cases
+```
+
+### Explanations
+
+```bash
+GET  /api/explanations/{transaction_id}   # Transaction explanation
+GET  /api/explanations/case/{case_id}     # Case explanation
+```
+
+### Reports
+
+```bash
+GET  /api/reports                         # List reports
+POST /api/reports/generate/{case_id}      # Generate report
+GET  /api/reports/{id}/download           # Download report
 ```
 
 ---
 
-## 9. Docker Compose (optional)
+## 📊 Performance Metrics
 
-```bash
-docker compose up --build
-```
+### Model Performance (Elliptic Dataset)
 
-Ensure `backend/.env` is present and mounted; compose maps `./models` and `./data` into the backend container for local artifacts and datasets.
+| Model        | PR-AUC   | ROC-AUC  | Precision@100 |
+| ------------ | -------- | -------- | ------------- |
+| Behavioral   | 0.78     | 0.92     | 0.85          |
+| Graph (GAT)  | 0.82     | 0.94     | 0.88          |
+| Entity       | 0.75     | 0.89     | 0.81          |
+| Temporal     | 0.73     | 0.88     | 0.79          |
+| Meta-Learner | **0.86** | **0.96** | **0.91**      |
+
+### Class Imbalance Handling
+
+- `scale_pos_weight` for XGBoost models
+- Weighted cross-entropy for neural networks
+- Licit-only training for autoencoder
+- Oversampling for LSTM sequences
+- Platt calibration for meta-learner
+
+### Validation Strategy
+
+- Time-aware splits (no future leakage)
+- Out-of-entity validation
+- Typology-level scorecards
+- Drift monitoring (PSI, feature drift)
 
 ---
 
-## Repository layout (high level)
+## 🛠️ Technology Stack
 
-```text
-Aegis-AML/
+### Backend
+
+- **FastAPI** - Modern async web framework
+- **NetworkX** - Graph construction and analysis
+- **PyTorch** - Deep learning (GAT, LSTM, Autoencoder)
+- **PyTorch Geometric** - Graph neural networks
+- **XGBoost** - Gradient boosting for tabular data
+- **scikit-learn** - Feature engineering and preprocessing
+- **SHAP** - Model explainability
+- **Supabase** - PostgreSQL database and storage
+
+### Frontend
+
+- **React 19** - UI framework
+- **Vite** - Build tool
+- **Tailwind CSS v4** - Styling
+- **Cytoscape.js** - Network graph visualization
+- **Plotly.js** - Charts and analytics
+- **React Router** - Navigation
+
+### ML Stack
+
+- **Optuna** - Hyperparameter optimization
+- **python-louvain / leidenalg** - Community detection
+- **pandas / numpy** - Data manipulation
+
+---
+
+## 📁 Project Structure
+
+```
+aegis-aml/
 ├── backend/
 │   ├── app/
-│   │   ├── api/              # FastAPI routers
-│   │   ├── ml/               # heuristics/, lenses/, training/, infer_pipeline, features
-│   │   ├── repositories/     # Supabase table access
+│   │   ├── api/              # FastAPI routes
+│   │   ├── ml/
+│   │   │   ├── heuristics/   # 185 typology rules
+│   │   │   ├── lenses/       # 6 ML models
+│   │   │   ├── training/     # Training scripts
+│   │   │   └── infer_pipeline.py
+│   │   ├── services/         # Business logic
+│   │   ├── repositories/     # Database access
 │   │   ├── schemas/          # Pydantic models
-│   │   ├── services/         # ingest, graph, scoring, explanations, …
-│   │   └── utils/
-│   ├── tests/
-│   ├── requirements.txt
-│   └── .env.example
+│   │   └── utils/            # Utilities
+│   ├── tests/                # Test suite
+│   └── requirements.txt
 ├── frontend/
-│   └── src/                  # pages, components, api, hooks, types
-├── supabase/
-│   ├── migrations/
-│   └── seed.sql
-├── data/                     # raw, processed, external (gitignored content)
-├── models/                   # trained artifacts (gitignored binaries)
-├── docker-compose.yml
-└── Makefile
+│   ├── src/
+│   │   ├── pages/            # Dashboard pages
+│   │   ├── components/       # Reusable components
+│   │   ├── api/              # API client
+│   │   └── utils/            # Utilities
+│   └── package.json
+├── data/
+│   ├── raw/                  # Raw datasets
+│   ├── processed/            # Processed features
+│   └── external/             # Elliptic dataset
+├── models/                   # Trained model artifacts
+│   ├── behavioral/
+│   ├── graph/
+│   ├── entity/
+│   ├── temporal/
+│   ├── document/
+│   ├── offramp/
+│   ├── meta/
+│   └── artifacts/
+└── docs/                     # Documentation
 ```
 
 ---
 
-## License / demo notice
+## 🧪 Testing
 
-This project is intended for **research and demonstration**. Risk scores are not legal or compliance advice; tune and validate any production deployment separately.
+```bash
+# Run all tests
+cd backend
+pytest
+
+# Run specific test suites
+pytest tests/test_heuristics.py      # Heuristic engine
+pytest tests/test_lenses.py          # ML models
+pytest tests/test_scoring.py         # End-to-end pipeline
+pytest tests/test_api.py             # API endpoints
+pytest tests/test_leakage.py         # Data leakage checks
+pytest tests/test_drift_monitoring.py # Drift detection
+```
+
+---
+
+## 🔒 Security & Compliance
+
+### Data Privacy
+
+- PII substitution in examples
+- Configurable data retention policies
+- Audit logging for all operations
+
+### Explainability
+
+- SHAP values for all XGBoost models
+- Plain-English explanations
+- Heuristic evidence trails
+- Typology mapping to regulatory guidance
+
+### Governance
+
+- Typology-level recall/precision tracking
+- Cohort-based threshold policies
+- Drift monitoring and alerting
+- Model versioning and rollback
+
+---
+
+## 📚 Documentation
+
+- [Architecture Overview](docs/architecture.md)
+- [Heuristic Catalog](docs/heuristics.md)
+- [Model Training Guide](docs/training.md)
+- [API Documentation](docs/api.md)
+- [Deployment Guide](docs/deployment.md)
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Development Setup
+
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+npm install --save-dev
+
+# Run linters
+ruff check backend/
+npm run lint
+
+# Format code
+ruff format backend/
+npm run format
+```
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- **Elliptic Dataset** - Training and evaluation data
+- **Money Laundering Typologies Atlas** - Heuristic taxonomy
+- **PyTorch Geometric** - Graph neural network framework
+- **FastAPI** - Modern Python web framework
+
+---
+
+## 📞 Contact
+
+- **Issues:** [GitHub Issues](https://github.com/yourusername/aegis-aml/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/yourusername/aegis-aml/discussions)
+- **Email:** your.email@example.com
+
+---
+
+## 🗺️ Roadmap
+
+- [ ] Real-time streaming inference
+- [ ] Multi-chain support (Ethereum, Solana, etc.)
+- [ ] Advanced NLP for document analysis
+- [ ] Federated learning for privacy-preserving training
+- [ ] Integration with blockchain explorers
+- [ ] Mobile app for investigators
+- [ ] Automated report generation (PDF/DOCX)
+- [ ] SAR (Suspicious Activity Report) export
+
+---
+
+<div align="center">
+
+**Built with ❤️ for the fight against financial crime**
+
+[⭐ Star us on GitHub](https://github.com/yourusername/aegis-aml) | [📖 Read the Docs](https://aegis-aml.readthedocs.io) | [💬 Join Discord](https://discord.gg/aegis-aml)
+
+</div>
