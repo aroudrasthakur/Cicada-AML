@@ -39,5 +39,6 @@ async def score_all():
         return {"scored": 0}
     pipeline = InferencePipeline()
     pipeline.load_models()
-    results = pipeline.score_transactions(data)
+    # Graph will be built automatically inside score_transactions
+    results = pipeline.score_transactions(data, graph=None)
     return {"scored": len(results)}

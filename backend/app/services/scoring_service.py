@@ -17,10 +17,11 @@ def get_pipeline() -> InferencePipeline:
     return _pipeline
 
 
-def score_and_persist(transactions: list[dict]) -> list[dict]:
+def score_and_persist(transactions: list[dict], graph=None) -> list[dict]:
     """Run full scoring pipeline and persist results to database."""
     pipeline = get_pipeline()
-    results = pipeline.score_transactions(transactions)
+    # Graph will be built automatically if not provided
+    results = pipeline.score_transactions(transactions, graph=graph)
     
     heuristic_records = []
     score_records = []

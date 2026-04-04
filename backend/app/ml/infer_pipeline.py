@@ -87,7 +87,7 @@ class InferencePipeline:
     def score_transactions(
         self,
         transactions: list[dict[str, Any]],
-        graph: nx.DiGraph,
+        graph: nx.DiGraph | None = None,
         context: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Full pipeline: features → heuristics → lenses → meta → threshold → results."""
@@ -95,6 +95,13 @@ class InferencePipeline:
             self.load_models()
 
         context = context or {}
+        
+        # Build graph if not provided
+        if graph is None:
+            from app.services.graph_service import build_wallet_graph
+            graph = build_wallet_graph(transactions)
+            logger.info("Built graph from transactions: %d nodes, %d edges", 
+                       graph.number_of_nodes(), graph.number_of_edges())
 
         # --- 1. Feature extraction ---
         all_features = compute_all_features(transactions, graph)
@@ -167,6 +174,9 @@ class InferencePipeline:
                 "temporal_score": float(lens_scores.get("temporal_score", 0)),
                 "document_score": float(lens_scores.get("document_score", 0)),
                 "offramp_score": float(lens_scores.get("offramp_score", 0)),
+                "heuristic_vector": h_result["heuristic_vector"],
+                "applicability_vector": h_result["applicability_vector"],
+                "triggered_ids": h_result["triggered_ids"],
                 "heuristic_triggered_count": h_result["triggered_count"],
                 "heuristic_top_typology": h_result["top_typology"],
                 "heuristic_top_confidence": h_result["top_confidence"],

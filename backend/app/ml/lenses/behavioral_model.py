@@ -57,6 +57,11 @@ class BehavioralLens:
     def predict(self, features_df: pd.DataFrame, heuristic_scores: np.ndarray = None) -> dict:
         """Run inference. Returns behavioral_score and behavioral_anomaly_score."""
         X = self._select_features(features_df, heuristic_scores)
+        
+        # Apply scaler if available (trained models expect scaled features)
+        if self.scaler is not None:
+            X = self.scaler.transform(X)
+        
         behavioral_score = np.zeros(X.shape[0])
         anomaly_score = np.zeros(X.shape[0])
         if self.xgb_model is not None:
@@ -74,6 +79,13 @@ class BehavioralLens:
         if xgb_p.exists():
             self.xgb_model = joblib.load(xgb_p)
             logger.info(f"Loaded behavioral XGBoost from {xgb_p}")
+        
+        # Load scaler
+        scaler_path = xgb_p.parent / "scaler_behavioral.pkl"
+        if scaler_path.exists():
+            self.scaler = joblib.load(scaler_path)
+            logger.info(f"Loaded behavioral scaler from {scaler_path}")
+        
         if ae_p.exists():
             state = torch.load(ae_p, map_location="cpu", weights_only=True)
             input_dim = state.get("input_dim", 32)
