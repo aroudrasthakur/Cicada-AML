@@ -1,6 +1,8 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { supabase } from "@/api/supabase";
 
+type RetryConfig = InternalAxiosRequestConfig & { _retry?: boolean };
+
 const client = axios.create({
   baseURL: "/api",
 });

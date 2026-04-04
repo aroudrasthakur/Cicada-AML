@@ -1,7 +1,7 @@
 """Orchestrates transaction, graph, and subgraph feature pipelines."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import networkx as nx
 import pandas as pd
@@ -36,6 +36,8 @@ def _transactions_to_dataframe(transactions: list[dict[str, Any]]) -> pd.DataFra
 def compute_all_features(
     transactions: list[dict[str, Any]],
     graph: nx.DiGraph,
+    *,
+    global_metrics: Literal["full", "none"] = "full",
 ) -> dict[str, Any]:
     """Run all feature extractors and return separate tables plus a merged view."""
     df = _transactions_to_dataframe(transactions)
@@ -50,9 +52,10 @@ def compute_all_features(
             "graph_features": empty,
             "subgraph_features": empty,
             "combined": combined,
+            "node_features": {},
         }
 
-    node_feats = compute_node_features(graph)
+    node_feats = compute_node_features(graph, global_metrics=global_metrics)
     graph_features = compute_graph_features(graph, node_feats)
     subgraph_features = compute_subgraph_features(graph, df)
 
@@ -117,4 +120,5 @@ def compute_all_features(
         "graph_features": graph_features,
         "subgraph_features": subgraph_features,
         "combined": combined,
+        "node_features": node_feats,
     }

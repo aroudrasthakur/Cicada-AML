@@ -14,7 +14,7 @@ import pandas as pd
 
 from app.repositories import runs_repo
 from app.services.cleaning_service import clean_transactions
-from app.services.graph_service import build_wallet_graph, compute_node_features
+from app.services.graph_service import build_wallet_graph
 from app.services.scoring_service import get_pipeline
 from app.utils.graph_utils import graph_to_cytoscape, detect_cycles
 from app.utils.logger import get_logger
@@ -105,8 +105,13 @@ def _collect_suspicious_transactions(
     return suspicious
 
 
-def _update(run_id: str, pct: int, **kw: Any) -> None:
-    runs_repo.update_run_status(run_id, "running", progress_pct=pct, **kw)
+def _step(run_id: str, pct: int, message: str, **kw: Any) -> None:
+    """Update progress text + append a line to the visual log."""
+    runs_repo.update_run(run_id, progress_pct=pct, current_step=message, **kw)
+    try:
+        runs_repo.append_progress_log(run_id, message)
+    except Exception:
+        logger.exception("append_progress_log failed for run %s", run_id)
 
 
 async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
@@ -127,7 +132,17 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
     """
     loop = asyncio.get_running_loop()
     try:
-        runs_repo.update_run_status(run_id, "running", progress_pct=5)
+        runs_repo.update_run_status(
+            run_id,
+            "running",
+            progress_pct=5,
+            current_step="Starting pipeline…",
+            progress_log=[],
+            scoring_tx_done=0,
+            scoring_tx_total=0,
+            lenses_completed=0,
+        )
+        runs_repo.append_progress_log(run_id, "Pipeline started")
 
         # ---- 1. Merge & clean ------------------------------------------------
         merged = pd.concat(frames, ignore_index=True)
@@ -135,30 +150,130 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
         merged = merged.drop_duplicates(subset=["transaction_id"], keep="first")
         merged = merged.sort_values("timestamp").reset_index(drop=True)
         total_txns = len(merged)
-        runs_repo.update_run(run_id, total_txns=total_txns, progress_pct=10)
+        runs_repo.update_run(
+            run_id,
+            total_txns=total_txns,
+            progress_pct=10,
+            current_step=f"Merged and validated {total_txns} transactions from upload",
+        )
+        runs_repo.append_progress_log(
+            run_id, f"Merged and validated {total_txns} transactions from upload",
+        )
         logger.info("Run %s: merged %d transactions", run_id, total_txns)
 
         # ---- 2. Persist run_transactions -------------------------------------
         tx_records = _df_to_tx_records(merged)
         await loop.run_in_executor(None, runs_repo.insert_run_transactions, run_id, tx_records)
-        _update(run_id, 15)
+        _step(run_id, 15, f"Saved {total_txns} rows to run storage")
 
         # ---- 3. Build wallet graph -------------------------------------------
         transactions_dicts = merged.to_dict("records")
         graph: nx.DiGraph = await loop.run_in_executor(None, build_wallet_graph, transactions_dicts)
-        _update(run_id, 20)
+        _step(
+            run_id,
+            20,
+            f"Built wallet graph ({graph.number_of_nodes()} wallets, {graph.number_of_edges()} edges)",
+        )
 
         # ---- 4. Score transactions (CPU-heavy) -------------------------------
-        pipeline = get_pipeline()
-        results: list[dict] = await loop.run_in_executor(
-            None, pipeline.score_transactions, transactions_dicts, graph,
+        # get_pipeline() runs inside the executor so cold model load does not block the event loop.
+
+        def _scoring_progress(info: dict) -> None:
+            phase = info.get("phase")
+            tx_n = int(info.get("tx_total", 0))
+            try:
+                if phase == "batch_features":
+                    nn = int(info.get("graph_nodes", 0))
+                    gm = str(info.get("global_metrics", "full"))
+                    if gm == "none":
+                        step_msg = (
+                            f"Computing features ({tx_n} tx, {nn} wallets) — "
+                            "local metrics only (fast path)"
+                        )
+                    elif nn > 4000 or tx_n > 2000:
+                        step_msg = (
+                            f"Computing features ({tx_n} tx, {nn} wallets) — "
+                            "PageRank/betweenness may take a few minutes"
+                        )
+                    else:
+                        step_msg = f"Computing features ({tx_n} tx, {nn} wallets)"
+                    runs_repo.update_run(
+                        run_id, progress_pct=21,
+                        current_step=step_msg,
+                        scoring_tx_total=tx_n, scoring_tx_done=0,
+                    )
+                    runs_repo.append_progress_log(run_id, step_msg)
+                    return
+
+                if phase == "heuristics":
+                    runs_repo.update_run(
+                        run_id, progress_pct=30,
+                        current_step=f"Running {tx_n} × 185 heuristics…",
+                    )
+                    runs_repo.append_progress_log(
+                        run_id, f"Heuristics phase ({tx_n} transactions × 185 rules)",
+                    )
+                    return
+
+                if phase == "batch_lenses":
+                    runs_repo.update_run(
+                        run_id, progress_pct=45,
+                        current_step="Batch ML inference — 5 lenses (GPU-accelerated)",
+                        lenses_completed=0,
+                    )
+                    runs_repo.append_progress_log(
+                        run_id, "Batch lens inference (behavioral, graph, temporal, offramp, entity)",
+                    )
+                    return
+
+                if phase == "meta_learner":
+                    runs_repo.update_run(
+                        run_id, progress_pct=60,
+                        current_step="Batch meta-learner scoring",
+                        lenses_completed=5,
+                    )
+                    runs_repo.append_progress_log(run_id, "Meta-learner scoring (batched)")
+                    return
+
+                # Per-tx result assembly (rapid; only update periodically)
+                if "tx_index" in info:
+                    tx_i = int(info["tx_index"])
+                    if tx_n <= 0:
+                        return
+                    pct = 60 + int(10 * (tx_i + 1) / tx_n)
+                    if tx_i == tx_n - 1 or (tx_n <= 100) or (tx_i % max(1, tx_n // 10) == 0):
+                        runs_repo.update_run(
+                            run_id, progress_pct=pct,
+                            current_step=f"Assembling results: {tx_i + 1}/{tx_n}",
+                            scoring_tx_done=tx_i + 1,
+                            scoring_tx_total=tx_n,
+                        )
+            except Exception:
+                logger.exception("scoring progress update failed for run %s", run_id)
+
+        def _run_score() -> list[dict]:
+            _step(run_id, 20, "Loading ML models…")
+            pipeline = get_pipeline()
+            return pipeline.score_transactions(
+                transactions_dicts,
+                graph,
+                progress_callback=_scoring_progress,
+            )
+
+        results: list[dict] = await loop.run_in_executor(None, _run_score)
+        _step(
+            run_id,
+            70,
+            "ML scoring complete — all 5 lenses applied to every transaction",
+            lenses_completed=5,
+            scoring_tx_done=total_txns,
+            scoring_tx_total=total_txns,
         )
-        _update(run_id, 70)
 
         # ---- 5. Persist run_scores -------------------------------------------
         score_records = _build_score_records(results)
         await loop.run_in_executor(None, runs_repo.insert_run_scores, run_id, score_records)
-        _update(run_id, 75)
+        _step(run_id, 75, "Persisted lens scores and meta-learner output")
 
         # ---- 6. Identify suspicious transactions -----------------------------
         threshold = _load_suspicious_threshold()
@@ -184,7 +299,11 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
             "Run %s: %d/%d transactions flagged suspicious (decision_threshold=%.6f)",
             run_id, len(suspicious), len(results), threshold,
         )
-        _update(run_id, 80)
+        _step(
+            run_id,
+            80,
+            f"Identified {len(suspicious)} suspicious transactions for clustering",
+        )
 
         # ---- 7. Detect clusters among suspicious wallets ---------------------
         sus_wallets: set[str] = set()
@@ -196,7 +315,7 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
         sus_wallets.discard("")
 
         cluster_groups = _detect_clusters(graph, sus_wallets, min_size=2)
-        _update(run_id, 85)
+        _step(run_id, 85, f"Detected {len(cluster_groups)} suspicious wallet clusters")
 
         # ---- 8. Persist clusters, members, suspicious_txns -------------------
         wallet_to_cluster: dict[str, str] = {}
@@ -221,7 +340,7 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
 
         sus_tx_records = _build_suspicious_records(suspicious, transactions_dicts, wallet_to_cluster)
         await loop.run_in_executor(None, runs_repo.insert_suspicious_txns, run_id, sus_tx_records)
-        _update(run_id, 90)
+        _step(run_id, 90, "Saved suspicious transactions and cluster memberships")
 
         # ---- 9. Cytoscape graph snapshots per cluster ------------------------
         for cr in cluster_records:
@@ -233,7 +352,11 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
             await loop.run_in_executor(
                 None, runs_repo.insert_graph_snapshot, run_id, cid, cyto.get("elements", []),
             )
-        _update(run_id, 92)
+        _step(
+            run_id,
+            92,
+            f"Saved {len(cluster_records)} Cytoscape graph snapshots for Flow Explorer",
+        )
 
         # ---- 10. Generate structured report ----------------------------------
         report_content = _build_report(
@@ -250,7 +373,7 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
         await loop.run_in_executor(
             None, runs_repo.insert_run_report, run_id, report_title, report_content,
         )
-        _update(run_id, 95)
+        _step(run_id, 95, "Generated structured run report")
 
         # ---- 11. Mark completed ----------------------------------------------
         runs_repo.update_run_status(
@@ -259,13 +382,26 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
             progress_pct=100,
             suspicious_tx_count=len(suspicious),
             suspicious_cluster_count=len(cluster_records),
+            current_step="Completed",
+            lenses_completed=5,
+            scoring_tx_done=total_txns,
+            scoring_tx_total=total_txns,
+        )
+        runs_repo.append_progress_log(
+            run_id,
+            f"Finished — {len(suspicious)} suspicious tx, {len(cluster_records)} clusters",
         )
         logger.info("Run %s completed: %d suspicious, %d clusters", run_id, len(suspicious), len(cluster_records))
 
     except Exception as exc:
         tb = traceback.format_exc()
         logger.error("Run %s failed: %s\n%s", run_id, exc, tb)
-        runs_repo.update_run_status(run_id, "failed", error_message=str(exc)[:2000])
+        runs_repo.update_run_status(
+            run_id,
+            "failed",
+            error_message=str(exc)[:2000],
+            current_step="Failed",
+        )
 
 
 # ---------------------------------------------------------------------------

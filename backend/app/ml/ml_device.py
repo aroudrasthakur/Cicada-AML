@@ -1,7 +1,9 @@
 """Resolve PyTorch / XGBoost device from settings with CPU fallback."""
 from __future__ import annotations
 
+import numpy as np
 import torch
+import xgboost as xgb
 from xgboost import XGBClassifier
 from xgboost.callback import TrainingCallback
 
@@ -9,6 +11,55 @@ from app.config import settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_xgb_use_gpu: bool | None = None
+
+
+def _xgb_cuda_available() -> bool:
+    """Cached check: is XGBoost CUDA inference viable?"""
+    global _xgb_use_gpu
+    if _xgb_use_gpu is not None:
+        return _xgb_use_gpu
+    if not settings.ml_use_gpu:
+        _xgb_use_gpu = False
+        return False
+    _xgb_use_gpu = torch.cuda.is_available()
+    return _xgb_use_gpu
+
+
+def xgb_predict_proba(model, X: np.ndarray) -> np.ndarray:
+    """GPU-native ``predict_proba`` for any XGBClassifier / Booster-backed model.
+
+    When the model lives on CUDA, builds an ``xgb.DMatrix`` so data flows through
+    the GPU path without the "mismatched devices / falling back" warning.
+    Returns shape ``(n, 2)`` identical to ``XGBClassifier.predict_proba``.
+    """
+    if not _xgb_cuda_available():
+        return model.predict_proba(X)
+
+    booster = _extract_booster(model)
+    if booster is None:
+        return model.predict_proba(X)
+
+    dm = xgb.DMatrix(X, nthread=-1)
+    raw = booster.predict(dm)
+
+    if raw.ndim == 1:
+        pos = raw.astype(np.float64)
+        return np.column_stack([1.0 - pos, pos])
+    return raw.astype(np.float64)
+
+
+def _extract_booster(model) -> xgb.Booster | None:
+    """Get the underlying Booster from an XGBClassifier (or calibrated wrapper)."""
+    if isinstance(model, xgb.Booster):
+        return model
+    if isinstance(model, XGBClassifier):
+        try:
+            return model.get_booster()
+        except Exception:
+            return None
+    return None
 
 
 class _XGBoostRoundLogger(TrainingCallback):

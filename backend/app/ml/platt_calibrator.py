@@ -11,6 +11,8 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 
+from app.ml.ml_device import xgb_predict_proba
+
 
 class PlattSigmoidCalibrator:
     """Sigmoid (Platt) calibration on a fitted classifier's positive-class probabilities.
@@ -24,12 +26,12 @@ class PlattSigmoidCalibrator:
         self._calibrator = LogisticRegression(solver="lbfgs", max_iter=2000, random_state=42)
 
     def fit(self, X, y) -> "PlattSigmoidCalibrator":
-        p = self.base_estimator.predict_proba(X)[:, 1].reshape(-1, 1)
+        p = xgb_predict_proba(self.base_estimator, X)[:, 1].reshape(-1, 1)
         self._calibrator.fit(p, np.asarray(y).astype(int))
         return self
 
     def predict_proba(self, X) -> np.ndarray:
-        p = self.base_estimator.predict_proba(X)[:, 1].reshape(-1, 1)
+        p = xgb_predict_proba(self.base_estimator, X)[:, 1].reshape(-1, 1)
         return self._calibrator.predict_proba(p)
 
 

@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # When true, use CUDA (XGBoost + PyTorch) or MPS (PyTorch only) when available; else CPU
     ml_use_gpu: bool = False
 
+    # Inference: graphs with more nodes skip PageRank/betweenness/clustering (can take minutes).
+    # Set to 0 to never skip. Training still uses full metrics when you run training code paths.
+    infer_skip_graph_global_metrics_above_nodes: int = 4000
+
     @property
     def model_dir_path(self) -> Path:
         return Path(self.model_dir)

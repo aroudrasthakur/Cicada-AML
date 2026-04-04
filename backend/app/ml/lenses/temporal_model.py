@@ -1,5 +1,6 @@
 """Temporal Lens: LSTM-based temporal anomaly detection."""
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from pathlib import Path
@@ -35,45 +36,58 @@ class TemporalLens:
         self.input_dim = None
         self._device = None
 
-    def build_sequences(self, transactions_df, wallet: str, heuristic_scores: np.ndarray = None) -> np.ndarray:
-        """Build padded sequence for a wallet."""
-        import pandas as pd
-        wallet_txs = transactions_df[
-            (transactions_df.get("sender_wallet", transactions_df.get("sender", pd.Series())) == wallet) |
-            (transactions_df.get("receiver_wallet", transactions_df.get("receiver", pd.Series())) == wallet)
-        ].sort_values("timestamp").tail(MAX_SEQ_LEN)
+    def _build_sequence(self, df: pd.DataFrame, wallet: str) -> np.ndarray:
+        """Build a (1, MAX_SEQ_LEN, 4) padded sequence for one wallet."""
+        sender_col = "sender_wallet" if "sender_wallet" in df.columns else "sender"
+        receiver_col = "receiver_wallet" if "receiver_wallet" in df.columns else "receiver"
+
+        mask = np.zeros(len(df), dtype=bool)
+        if sender_col in df.columns:
+            mask |= (df[sender_col].values == wallet)
+        if receiver_col in df.columns:
+            mask |= (df[receiver_col].values == wallet)
+
+        wallet_txs = df.loc[mask]
+        if "timestamp" in wallet_txs.columns:
+            wallet_txs = wallet_txs.sort_values("timestamp")
+        wallet_txs = wallet_txs.tail(MAX_SEQ_LEN)
+
         if len(wallet_txs) == 0:
             return np.zeros((1, MAX_SEQ_LEN, 4), dtype=np.float32)
-        features = []
-        for _, row in wallet_txs.iterrows():
-            f = [
-                float(row.get("amount", 0)),
-                float(row.get("time_since_prev_out", 0)),
-                1.0 if row.get("sender_wallet", row.get("sender")) == wallet else 0.0,
-                float(row.get("burstiness_score", 0)),
-            ]
-            features.append(f)
-        seq = np.array(features, dtype=np.float32)
-        if len(seq) < MAX_SEQ_LEN:
-            pad = np.zeros((MAX_SEQ_LEN - len(seq), seq.shape[1]), dtype=np.float32)
-            seq = np.vstack([pad, seq])
-        return seq.reshape(1, MAX_SEQ_LEN, -1)
 
-    def predict(self, transactions_df, wallets: list[str], heuristic_scores: np.ndarray = None) -> dict:
-        """Score temporal risk for a list of wallets."""
-        scores = {}
-        for wallet in wallets:
-            seq = self.build_sequences(transactions_df, wallet, heuristic_scores)
-            if self.model is not None:
-                device = self._device or resolve_torch_device()
-                self.model.eval()
-                with torch.no_grad():
-                    tensor = torch.FloatTensor(seq).to(device)
-                    logit = self.model(tensor).item()
-                    score = 1.0 / (1.0 + np.exp(-logit))  # Apply sigmoid to convert logit to probability
-            else:
-                score = 0.0
-            scores[wallet] = score
+        amt = wallet_txs["amount"].fillna(0).to_numpy(dtype=np.float32) if "amount" in wallet_txs.columns else np.zeros(len(wallet_txs), dtype=np.float32)
+        tspo = wallet_txs["time_since_prev_out"].fillna(0).to_numpy(dtype=np.float32) if "time_since_prev_out" in wallet_txs.columns else np.zeros(len(wallet_txs), dtype=np.float32)
+        is_sender = (wallet_txs[sender_col].values == wallet).astype(np.float32) if sender_col in wallet_txs.columns else np.zeros(len(wallet_txs), dtype=np.float32)
+        burst = wallet_txs["burstiness_score"].fillna(0).to_numpy(dtype=np.float32) if "burstiness_score" in wallet_txs.columns else np.zeros(len(wallet_txs), dtype=np.float32)
+
+        seq = np.column_stack([amt, tspo, is_sender, burst])
+        if len(seq) < MAX_SEQ_LEN:
+            pad = np.zeros((MAX_SEQ_LEN - len(seq), 4), dtype=np.float32)
+            seq = np.vstack([pad, seq])
+        return seq.reshape(1, MAX_SEQ_LEN, 4)
+
+    def predict(self, transactions_df: pd.DataFrame, wallets: list[str], heuristic_scores: np.ndarray = None) -> dict:
+        """Score temporal risk for all wallets in a single batched GPU call."""
+        if not wallets:
+            return {"temporal_scores": {}}
+
+        seqs = [self._build_sequence(transactions_df, w) for w in wallets]
+        batch = np.concatenate(seqs, axis=0)  # (W, MAX_SEQ_LEN, 4)
+
+        scores: dict[str, float] = {}
+        if self.model is not None:
+            device = self._device or resolve_torch_device()
+            self.model.eval()
+            with torch.no_grad():
+                tensor = torch.from_numpy(batch).to(device)
+                logits = self.model(tensor).cpu().numpy()  # (W,)
+                probs = 1.0 / (1.0 + np.exp(-logits))
+            for i, w in enumerate(wallets):
+                scores[w] = float(probs[i])
+        else:
+            for w in wallets:
+                scores[w] = 0.0
+
         return {"temporal_scores": scores}
 
     def load(self, model_path: str):

@@ -72,7 +72,7 @@ export function RunProvider({ children }: { children: ReactNode }) {
       };
 
       poll();
-      pollRef.current = setInterval(poll, 2000);
+      pollRef.current = setInterval(poll, 1500);
     },
     [stopPolling, refreshRuns],
   );

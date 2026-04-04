@@ -1,5 +1,10 @@
 export type RunStatus = "pending" | "running" | "completed" | "failed";
 
+export interface ProgressLogEntry {
+  t: string;
+  msg: string;
+}
+
 export interface PipelineRun {
   id: string;
   /** Owner (Supabase auth user / profiles.id) */
@@ -15,6 +20,15 @@ export interface PipelineRun {
   total_txns: number;
   suspicious_tx_count: number;
   suspicious_cluster_count: number;
+  /** Latest human-readable pipeline phase */
+  current_step?: string | null;
+  /** Append-only step log for the UI */
+  progress_log?: ProgressLogEntry[] | null;
+  /** Transactions scored so far during ML phase */
+  scoring_tx_done?: number | null;
+  scoring_tx_total?: number | null;
+  /** 0–5 workload indicator (maps scoring progress; 5 = all lens outputs applied) */
+  lenses_completed?: number | null;
 }
 
 export interface RunCluster {

@@ -54,10 +54,9 @@ class TestInferencePipelineStructure:
 class TestScoreTransactionsReturnsResults:
     @patch("app.ml.infer_pipeline.run_heuristics")
     @patch("app.ml.infer_pipeline.compute_all_features")
-    @patch("app.ml.infer_pipeline.compute_node_features")
     @patch("app.ml.infer_pipeline.assess_data_availability")
     def test_output_format(
-        self, mock_avail, mock_node_feat, mock_all_feat, mock_heur,
+        self, mock_avail, mock_all_feat, mock_heur,
         sample_transactions, sample_graph,
     ):
         mock_all_feat.return_value = {
@@ -65,8 +64,8 @@ class TestScoreTransactionsReturnsResults:
             "graph_features": pd.DataFrame(),
             "subgraph_features": pd.DataFrame(),
             "combined": pd.DataFrame({"amount": [100.0] * len(sample_transactions)}),
+            "node_features": {},
         }
-        mock_node_feat.return_value = {}
         mock_heur.return_value = {
             "heuristic_vector": [0.0] * 185,
             "applicability_vector": ["applicable"] * 185,

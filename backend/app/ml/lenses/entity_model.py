@@ -5,6 +5,7 @@ from pathlib import Path
 import networkx as nx
 
 from app.ml.entity_pickle_compat import ensure_entity_epoch_logger_on_main
+from app.ml.ml_device import xgb_predict_proba
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -116,7 +117,7 @@ class EntityLens:
             if rows:
                 X = pd.DataFrame(rows)[cols].fillna(0).values.astype(np.float32)
                 try:
-                    probs = self.classifier.predict_proba(X)[:, 1]
+                    probs = xgb_predict_proba(self.classifier, X)[:, 1]
                     for cid, prob in zip(cids, probs):
                         cluster_scores[cid] = float(prob)
                 except Exception as exc:

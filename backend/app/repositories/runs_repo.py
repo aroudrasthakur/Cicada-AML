@@ -32,6 +32,17 @@ def update_run(run_id: str, **fields: Any) -> dict:
     return (resp.data or [{}])[0]
 
 
+def append_progress_log(run_id: str, message: str) -> None:
+    """Append a timestamped step to progress_log (capped in-app)."""
+    sb = get_supabase()
+    resp = sb.table("pipeline_runs").select("progress_log").eq("id", run_id).maybe_single().execute()
+    raw = (resp.data or {}).get("progress_log") if resp and resp.data else None
+    log: list = raw if isinstance(raw, list) else []
+    log.append({"t": datetime.now(timezone.utc).isoformat(), "msg": message})
+    log = log[-40:]
+    sb.table("pipeline_runs").update({"progress_log": log}).eq("id", run_id).execute()
+
+
 def update_run_status(
     run_id: str,
     status: str,

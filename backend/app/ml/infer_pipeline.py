@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import joblib
 import networkx as nx
 import numpy as np
 import pandas as pd
+import torch
 
 from app.config import settings
 from app.ml.heuristics.runner import run_all as run_heuristics
@@ -19,9 +20,9 @@ from app.ml.lenses.entity_model import EntityLens
 from app.ml.lenses.graph_model import GraphLens
 from app.ml.lenses.offramp_model import OfframpLens
 from app.ml.lenses.temporal_model import TemporalLens
+from app.ml.ml_device import xgb_predict_proba, resolve_torch_device
 from app.services.data_availability_service import assess_data_availability
 from app.services.feature_service import compute_all_features
-from app.services.graph_service import compute_node_features
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,12 +32,11 @@ class InferencePipeline:
     """Orchestrates the full Aegis-AML scoring pipeline.
 
     Ordering contract:
-        1. Feature extraction
-        2. Heuristics (always first — zero-ML fallback)
-        3. Parallel lenses: behavioral, graph, temporal, offramp
-        4. Entity lens (depends on graph embeddings from step 3)
-        5. Meta-learner on stacked scores
-        6. Threshold decision
+        1. Feature extraction (batched)
+        2. Heuristics (per-tx, inherently sequential)
+        3. Batch lenses: behavioral, graph, temporal, offramp, entity
+        4. Batch meta-learner on stacked scores
+        5. Threshold decision (vectorised)
     """
 
     def __init__(self) -> None:
@@ -92,11 +92,7 @@ class InferencePipeline:
         transactions: list[dict[str, Any]],
         graph: nx.DiGraph,
     ) -> dict[str, dict[str, Any]]:
-        """Build a per-wallet summary dict used by heuristics.
-
-        Each entry has the shape expected by heuristic ``wallet`` param:
-        ``{"address": str, "total_in": float, "total_out": float, ...}``
-        """
+        """Build a per-wallet summary dict used by heuristics."""
         profiles: dict[str, dict[str, Any]] = {}
 
         for tx in transactions:
@@ -150,7 +146,6 @@ class InferencePipeline:
             p["pass_through_ratio"] = (
                 p["total_out"] / p["total_in"] if p["total_in"] > 0 else 0.0
             )
-            # Approximate balance: what stays in the wallet
             p["balances"] = [max(p["total_in"] - p["total_out"], 0.0)]
 
         return profiles
@@ -178,12 +173,21 @@ class InferencePipeline:
         transactions: list[dict[str, Any]],
         graph: nx.DiGraph | None = None,
         context: dict[str, Any] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> list[dict[str, Any]]:
-        """Full pipeline: features -> heuristics -> lenses -> meta -> threshold -> results."""
+        """Full pipeline — batched where possible, GPU-accelerated.
+
+        1. Batch feature extraction
+        2. Per-tx heuristics (inherently sequential)
+        3. Batch lens inference (single XGBoost/PyTorch call per lens)
+        4. Batch meta-learner
+        5. Vectorised threshold decision
+        """
         if not self._loaded:
             self.load_models()
 
         context = context or {}
+        n_tx = len(transactions)
 
         if graph is None:
             from app.services.graph_service import build_wallet_graph
@@ -195,106 +199,38 @@ class InferencePipeline:
         wallet_profiles = self._build_wallet_profiles(transactions, graph)
         logger.info("Built wallet profiles for %d addresses", len(wallet_profiles))
 
-        # --- 1. Feature extraction ---
-        all_features = compute_all_features(transactions, graph)
-        tx_features = all_features["transaction_features"]
+        # --- 1. Batch feature extraction ---
+        nn = graph.number_of_nodes() if graph is not None else 0
+        gm: Literal["full", "none"] = "full"
+        skip_above = settings.infer_skip_graph_global_metrics_above_nodes
+        if skip_above > 0 and nn > skip_above:
+            gm = "none"
+            logger.warning(
+                "Inference: %d graph nodes (threshold %d); skipping global centralities for speed",
+                nn, skip_above,
+            )
+
+        if progress_callback is not None:
+            try:
+                progress_callback({
+                    "phase": "batch_features",
+                    "tx_total": n_tx,
+                    "graph_nodes": nn,
+                    "global_metrics": gm,
+                })
+            except Exception:
+                logger.exception("progress_callback failed")
+
+        all_features = compute_all_features(transactions, graph, global_metrics=gm)
         combined = all_features["combined"]
-        node_features = compute_node_features(graph) if graph.number_of_nodes() > 0 else {}
+        node_features = all_features.get("node_features") or {}
 
         data_flags = assess_data_availability(
-            has_transactions=len(transactions) > 0,
+            has_transactions=n_tx > 0,
             has_address_tags=context.get("has_address_tags", False),
             has_entity_links=context.get("has_entity_links", False),
         )
 
-        results = []
-        for i, tx in enumerate(transactions):
-            row_features = combined.iloc[[i]] if i < len(combined) else pd.DataFrame()
-            feat_dict = row_features.to_dict("records")[0] if not row_features.empty else {}
-
-            # --- 2. Heuristics (always first) ---
-            wallet_id = str(tx.get("sender_wallet") or tx.get("sender", ""))
-            wallet_prof = wallet_profiles.get(wallet_id, {"address": wallet_id})
-            tx_ctx = self._build_tx_context(tx, wallet_prof, context)
-
-            h_result = run_heuristics(
-                tx=tx,
-                wallet=wallet_prof,
-                graph=graph,
-                features=feat_dict,
-                context=tx_ctx,
-            )
-            h_vec = np.array(h_result["heuristic_vector"], dtype=np.float32)
-
-            # --- 3. Parallel lens group: behavioral, graph, temporal, offramp ---
-            lens_scores = self._run_parallel_lenses(
-                tx, row_features, graph, node_features, h_vec, data_flags, context,
-            )
-
-            # --- 4. Entity lens (depends on graph embeddings) ---
-            entity_out = self.entity.predict(
-                graph,
-                heuristic_scores={},
-                embeddings=lens_scores.get("_graph_embeddings"),
-                node_mapping=lens_scores.get("_graph_node_mapping"),
-            )
-            wallet_id = str(tx.get("sender_wallet") or tx.get("sender", ""))
-            entity_info = entity_out["entity_scores"].get(wallet_id, {})
-            lens_scores["entity_score"] = entity_info.get("entity_score", 0.0)
-
-            # --- 5. Meta-learner ---
-            meta_score = self._run_meta(lens_scores, h_result, data_flags)
-
-            # --- 6. Threshold decision ---
-            decision_threshold = self.threshold_config.get("decision_threshold", 0.5)
-            high_threshold = self.threshold_config.get("high_risk_threshold", 0.9)
-            low_ceiling = self.threshold_config.get("low_risk_ceiling", 0.3)
-
-            if meta_score >= high_threshold:
-                risk_level = "high"
-            elif meta_score >= decision_threshold:
-                risk_level = "medium"
-            elif meta_score <= low_ceiling:
-                risk_level = "low"
-            else:
-                risk_level = "medium-low"
-
-            results.append({
-                "transaction_id": tx.get("transaction_id") or tx.get("id", f"tx_{i}"),
-                "meta_score": float(meta_score),
-                "risk_level": risk_level,
-                "behavioral_score": float(lens_scores.get("behavioral_score", 0)),
-                "behavioral_anomaly_score": float(lens_scores.get("behavioral_anomaly_score", 0)),
-                "graph_score": float(lens_scores.get("graph_score", 0)),
-                "entity_score": float(lens_scores.get("entity_score", 0)),
-                "temporal_score": float(lens_scores.get("temporal_score", 0)),
-                "offramp_score": float(lens_scores.get("offramp_score", 0)),
-                "heuristic_vector": h_result["heuristic_vector"],
-                "applicability_vector": h_result["applicability_vector"],
-                "triggered_ids": h_result["triggered_ids"],
-                "heuristic_triggered_count": h_result["triggered_count"],
-                "heuristic_top_typology": h_result["top_typology"],
-                "heuristic_top_confidence": h_result["top_confidence"],
-                "heuristic_explanations": h_result["explanations"],
-                "coverage_tier": data_flags.coverage_tier.value,
-                "decision_threshold": decision_threshold,
-            })
-
-        logger.info("Scored %d transactions", len(results))
-        return results
-
-    def _run_parallel_lenses(
-        self,
-        tx: dict,
-        row_features: pd.DataFrame,
-        graph: nx.DiGraph,
-        node_features: dict,
-        h_vec: np.ndarray,
-        data_flags: Any,
-        context: dict,
-    ) -> dict[str, Any]:
-        """Run independent lenses in parallel, aggregate scores."""
-        scores: dict[str, Any] = {}
         lens_available: dict[str, bool] = {
             "behavioral": self.behavioral.xgb_model is not None,
             "graph": self.graph.model is not None,
@@ -302,90 +238,218 @@ class InferencePipeline:
             "offramp": self.offramp.classifier is not None,
             "entity": self.entity.classifier is not None,
         }
-        scores["_lens_available"] = lens_available
 
-        def _behavioral() -> None:
-            out = self.behavioral.predict(row_features, h_vec)
-            scores["behavioral_score"] = float(np.mean(out["behavioral_score"]))
-            scores["behavioral_anomaly_score"] = float(np.mean(out["behavioral_anomaly_score"]))
+        # --- 2. Per-tx heuristics (sequential, but no ML overhead) ---
+        if progress_callback is not None:
+            try:
+                progress_callback({"phase": "heuristics", "tx_total": n_tx})
+            except Exception:
+                logger.exception("progress_callback failed")
 
-        def _graph() -> None:
-            out = self.graph.predict(graph, node_features)
+        h_results: list[dict] = []
+        h_matrix = np.zeros((n_tx, 185), dtype=np.float32)
+        feat_dicts: list[dict] = []
+        wallet_ids: list[str] = []
+
+        for i, tx in enumerate(transactions):
+            row_features = combined.iloc[[i]] if i < len(combined) else pd.DataFrame()
+            feat_dict = row_features.to_dict("records")[0] if not row_features.empty else {}
+            feat_dicts.append(feat_dict)
+
             wallet_id = str(tx.get("sender_wallet") or tx.get("sender", ""))
-            inv = out.get("node_mapping", {})
-            node_idx = {v: k for k, v in inv.items()}.get(wallet_id)
-            scores["graph_score"] = float(out["graph_score"][node_idx]) if node_idx is not None else 0.0
-            scores["_graph_embeddings"] = out.get("embeddings")
-            scores["_graph_node_mapping"] = out.get("node_mapping")
+            wallet_ids.append(wallet_id)
+            wallet_prof = wallet_profiles.get(wallet_id, {"address": wallet_id})
+            tx_ctx = self._build_tx_context(tx, wallet_prof, context)
 
-        def _temporal() -> None:
-            wallet_id = str(tx.get("sender_wallet") or tx.get("sender", ""))
-            df = row_features if not row_features.empty else pd.DataFrame([tx])
-            out = self.temporal.predict(df, [wallet_id])
-            scores["temporal_score"] = out["temporal_scores"].get(wallet_id, 0.0)
+            h_result = run_heuristics(
+                tx=tx, wallet=wallet_prof, graph=graph,
+                features=feat_dict, context=tx_ctx,
+            )
+            h_results.append(h_result)
+            h_matrix[i] = h_result["heuristic_vector"]
 
-        def _offramp() -> None:
-            out = self.offramp.predict(row_features if not row_features.empty else pd.DataFrame(), h_vec)
-            scores["offramp_score"] = float(np.mean(out["offramp_score"]))
+        logger.info("Heuristics complete for %d transactions", n_tx)
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = [
-                pool.submit(_behavioral),
-                pool.submit(_graph),
-                pool.submit(_temporal),
-                pool.submit(_offramp),
-            ]
-            for fut in futures:
-                try:
-                    fut.result(timeout=30)
-                except Exception as exc:
-                    logger.error("Lens execution failed: %s", exc)
+        # --- 3. BATCH lens inference (single call per lens) ---
+        if progress_callback is not None:
+            try:
+                progress_callback({"phase": "batch_lenses", "tx_total": n_tx})
+            except Exception:
+                logger.exception("progress_callback failed")
 
-        return scores
+        # 3a. Behavioral (XGBoost + Autoencoder) — full batch
+        beh_out = self.behavioral.predict(combined, h_matrix)
+        beh_scores = np.asarray(beh_out["behavioral_score"], dtype=np.float64).ravel()
+        beh_anomaly = np.asarray(beh_out["behavioral_anomaly_score"], dtype=np.float64).ravel()
+        if len(beh_scores) < n_tx:
+            beh_scores = np.pad(beh_scores, (0, n_tx - len(beh_scores)))
+            beh_anomaly = np.pad(beh_anomaly, (0, n_tx - len(beh_anomaly)))
 
-    def _run_meta(
-        self,
-        lens_scores: dict[str, Any],
-        h_result: dict,
-        data_flags: Any,
-    ) -> float:
-        """Assemble meta feature vector and predict."""
-        h_vec = np.array(h_result["heuristic_vector"], dtype=np.float32)
-        triggered = h_result["triggered_count"]
-        h_nonzero = h_vec[h_vec > 0]
+        # 3b. Graph lens — single GAT forward pass for entire graph
+        graph_out = self.graph.predict(graph, node_features)
+        graph_score_arr = graph_out["graph_score"]
+        graph_embeddings = graph_out.get("embeddings")
+        graph_node_mapping = graph_out.get("node_mapping", {})
+        inv_node_map = {v: k for k, v in graph_node_mapping.items()} if graph_node_mapping else {}
+        per_tx_graph_scores = np.zeros(n_tx, dtype=np.float64)
+        for i, wid in enumerate(wallet_ids):
+            node_idx = inv_node_map.get(wid)
+            if node_idx is not None and node_idx < len(graph_score_arr):
+                per_tx_graph_scores[i] = float(graph_score_arr[node_idx])
 
-        meta_dict = {
-            "behavioral_score": lens_scores.get("behavioral_score", 0),
-            "behavioral_anomaly_score": lens_scores.get("behavioral_anomaly_score", 0),
-            "graph_score": lens_scores.get("graph_score", 0),
-            "entity_score": lens_scores.get("entity_score", 0),
-            "temporal_score": lens_scores.get("temporal_score", 0),
-            "offramp_score": lens_scores.get("offramp_score", 0),
-            "heuristic_mean": float(h_nonzero.mean()) if len(h_nonzero) > 0 else 0.0,
-            "heuristic_max": float(h_vec.max()),
-            "heuristic_triggered_count": triggered,
-            "heuristic_top_confidence": float(h_result["top_confidence"] or 0),
-            "heuristic_triggered_ratio": triggered / max(len(h_vec), 1),
-            "has_entity_intel": float(data_flags.has_entity_intel),
-            "has_address_tags": float(data_flags.has_address_tags),
-            "coverage_tier_0": float(data_flags.coverage_tier.value == "tier0"),
-            "coverage_tier_1": float(data_flags.coverage_tier.value == "tier1"),
-            "coverage_tier_2": float(data_flags.coverage_tier.value == "tier2"),
-            "n_lenses_available": sum(
-                lens_scores.get("_lens_available", {}).values()
+        # 3c. Temporal lens — batch all unique wallets
+        unique_wallets = list(set(wallet_ids))
+        temporal_out = self.temporal.predict(combined, unique_wallets)
+        temporal_wallet_scores = temporal_out.get("temporal_scores", {})
+        per_tx_temporal_scores = np.array(
+            [temporal_wallet_scores.get(wid, 0.0) for wid in wallet_ids],
+            dtype=np.float64,
+        )
+
+        # 3d. Offramp lens — full batch
+        offramp_out = self.offramp.predict(combined, h_matrix)
+        offramp_scores = np.asarray(offramp_out["offramp_score"], dtype=np.float64).ravel()
+        if len(offramp_scores) < n_tx:
+            offramp_scores = np.pad(offramp_scores, (0, n_tx - len(offramp_scores)))
+
+        # 3e. Entity lens — single Louvain + XGBoost call for entire graph
+        entity_out = self.entity.predict(
+            graph,
+            heuristic_scores={},
+            embeddings=graph_embeddings,
+            node_mapping=graph_node_mapping,
+        )
+        entity_wallet_scores = entity_out.get("entity_scores", {})
+        per_tx_entity_scores = np.array(
+            [entity_wallet_scores.get(wid, {}).get("entity_score", 0.0) for wid in wallet_ids],
+            dtype=np.float64,
+        )
+
+        logger.info("All 5 lenses complete (batched)")
+
+        # --- 4. Batch meta-learner ---
+        if progress_callback is not None:
+            try:
+                progress_callback({"phase": "meta_learner", "tx_total": n_tx})
+            except Exception:
+                logger.exception("progress_callback failed")
+
+        meta_scores = self._run_meta_batch(
+            beh_scores, beh_anomaly, per_tx_graph_scores,
+            per_tx_entity_scores, per_tx_temporal_scores, offramp_scores,
+            h_matrix, h_results, data_flags, lens_available,
+        )
+
+        # --- 5. Vectorised threshold decision ---
+        decision_threshold = self.threshold_config.get("decision_threshold", 0.5)
+        high_threshold = self.threshold_config.get("high_risk_threshold", 0.9)
+        low_ceiling = self.threshold_config.get("low_risk_ceiling", 0.3)
+
+        risk_levels = np.where(
+            meta_scores >= high_threshold, "high",
+            np.where(
+                meta_scores >= decision_threshold, "medium",
+                np.where(meta_scores <= low_ceiling, "low", "medium-low"),
             ),
+        )
+
+        # --- 6. Assemble results ---
+        results: list[dict[str, Any]] = []
+        for i, tx in enumerate(transactions):
+            results.append({
+                "transaction_id": tx.get("transaction_id") or tx.get("id", f"tx_{i}"),
+                "meta_score": float(meta_scores[i]),
+                "risk_level": str(risk_levels[i]),
+                "behavioral_score": float(beh_scores[i]),
+                "behavioral_anomaly_score": float(beh_anomaly[i]),
+                "graph_score": float(per_tx_graph_scores[i]),
+                "entity_score": float(per_tx_entity_scores[i]),
+                "temporal_score": float(per_tx_temporal_scores[i]),
+                "offramp_score": float(offramp_scores[i]),
+                "heuristic_vector": h_results[i]["heuristic_vector"],
+                "applicability_vector": h_results[i]["applicability_vector"],
+                "triggered_ids": h_results[i]["triggered_ids"],
+                "heuristic_triggered_count": h_results[i]["triggered_count"],
+                "heuristic_top_typology": h_results[i]["top_typology"],
+                "heuristic_top_confidence": h_results[i]["top_confidence"],
+                "heuristic_explanations": h_results[i]["explanations"],
+                "coverage_tier": data_flags.coverage_tier.value,
+                "decision_threshold": decision_threshold,
+            })
+
+            if progress_callback is not None:
+                try:
+                    progress_callback({"tx_index": i, "tx_total": n_tx})
+                except Exception:
+                    logger.exception("progress_callback failed")
+
+        logger.info("Scored %d transactions", len(results))
+        return results
+
+    # ------------------------------------------------------------------
+    # Batch meta-learner
+    # ------------------------------------------------------------------
+
+    def _run_meta_batch(
+        self,
+        beh_scores: np.ndarray,
+        beh_anomaly: np.ndarray,
+        graph_scores: np.ndarray,
+        entity_scores: np.ndarray,
+        temporal_scores: np.ndarray,
+        offramp_scores: np.ndarray,
+        h_matrix: np.ndarray,
+        h_results: list[dict],
+        data_flags: Any,
+        lens_available: dict[str, bool],
+    ) -> np.ndarray:
+        """Vectorised meta-learner for all transactions at once."""
+        n = len(beh_scores)
+
+        h_nonzero_mask = h_matrix > 0
+        h_means = np.where(
+            h_nonzero_mask.any(axis=1),
+            np.where(h_nonzero_mask, h_matrix, 0).sum(axis=1) / np.maximum(h_nonzero_mask.sum(axis=1), 1),
+            0.0,
+        )
+        h_maxes = h_matrix.max(axis=1)
+        h_triggered = h_nonzero_mask.sum(axis=1).astype(np.float32)
+        h_top_conf = np.array([float(hr["top_confidence"] or 0) for hr in h_results], dtype=np.float32)
+        h_ratio = h_triggered / max(h_matrix.shape[1], 1)
+        n_lenses = float(sum(lens_available.values()))
+
+        meta_dict_cols = {
+            "behavioral_score": beh_scores,
+            "behavioral_anomaly_score": beh_anomaly,
+            "graph_score": graph_scores,
+            "entity_score": entity_scores,
+            "temporal_score": temporal_scores,
+            "offramp_score": offramp_scores,
+            "heuristic_mean": h_means,
+            "heuristic_max": h_maxes,
+            "heuristic_triggered_count": h_triggered,
+            "heuristic_top_confidence": h_top_conf,
+            "heuristic_triggered_ratio": h_ratio,
+            "has_entity_intel": np.full(n, float(data_flags.has_entity_intel)),
+            "has_address_tags": np.full(n, float(data_flags.has_address_tags)),
+            "coverage_tier_0": np.full(n, float(data_flags.coverage_tier.value == "tier0")),
+            "coverage_tier_1": np.full(n, float(data_flags.coverage_tier.value == "tier1")),
+            "coverage_tier_2": np.full(n, float(data_flags.coverage_tier.value == "tier2")),
+            "n_lenses_available": np.full(n, n_lenses),
         }
 
         if self.meta_model is not None:
-            feature_order = self.meta_feature_names or list(meta_dict.keys())
-            X = np.array([[meta_dict.get(f, 0.0) for f in feature_order]], dtype=np.float32)
-            return float(self.meta_model.predict_proba(X)[0, 1])
+            feature_order = self.meta_feature_names or list(meta_dict_cols.keys())
+            X = np.column_stack([meta_dict_cols.get(f, np.zeros(n)) for f in feature_order]).astype(np.float32)
+            proba = xgb_predict_proba(self.meta_model, X)
+            return proba[:, 1].astype(np.float64)
 
-        # Fallback: weighted average when meta-model is not trained yet
         weights = {
             "behavioral_score": 0.225, "graph_score": 0.175, "entity_score": 0.125,
             "temporal_score": 0.175, "offramp_score": 0.125,
             "heuristic_max": 0.175,
         }
-        score = sum(meta_dict.get(k, 0) * w for k, w in weights.items())
-        return float(np.clip(score, 0, 1))
+        score = np.zeros(n, dtype=np.float64)
+        for k, w in weights.items():
+            score += meta_dict_cols.get(k, np.zeros(n)) * w
+        return np.clip(score, 0, 1)

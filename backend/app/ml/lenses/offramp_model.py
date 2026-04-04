@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from pathlib import Path
+from app.ml.ml_device import xgb_predict_proba
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,26 +32,36 @@ class OfframpLens:
         return out
 
     @staticmethod
-    def _heuristic_aggregates(h_vec: np.ndarray | None) -> np.ndarray:
-        h = np.asarray(h_vec, dtype=np.float32).ravel() if h_vec is not None else np.zeros(185, dtype=np.float32)
-        nz = h[h > 0]
-        hm = float(nz.mean()) if len(nz) else 0.0
-        hx = float(h.max())
-        htc = float(np.sum(h > 0))
-        return np.array([[hm, hx, htc, hx]], dtype=np.float32)
+    def _heuristic_aggregates(h_vec: np.ndarray | None, n_rows: int = 1) -> np.ndarray:
+        """Aggregate heuristic scores into [mean, max, triggered_count, max].
+
+        Accepts 1-d (single tx) or 2-d (batch N x 185) arrays.
+        """
+        if h_vec is None:
+            return np.zeros((n_rows, 4), dtype=np.float32)
+        h = np.asarray(h_vec, dtype=np.float32)
+        if h.ndim == 1:
+            h = h.reshape(1, -1)
+        nz_mask = h > 0
+        nz_sum = np.where(nz_mask, h, 0).sum(axis=1)
+        nz_count = nz_mask.sum(axis=1).astype(np.float32)
+        hm = np.where(nz_count > 0, nz_sum / np.maximum(nz_count, 1), 0.0)
+        hx = h.max(axis=1)
+        return np.column_stack([hm, hx, nz_count, hx]).astype(np.float32)
 
     def predict(self, features_df: pd.DataFrame, heuristic_scores: np.ndarray = None, context: dict = None) -> dict:
         base = self._select_features(features_df)
         n = base.shape[0]
         if n == 0:
             return {"offramp_score": np.array([])}
-        agg = self._heuristic_aggregates(heuristic_scores)
-        agg = np.repeat(agg, n, axis=0)
+        agg = self._heuristic_aggregates(heuristic_scores, n_rows=n)
+        if len(agg) == 1 and n > 1:
+            agg = np.repeat(agg, n, axis=0)
         x = np.hstack([base, agg]).astype(np.float32)
         if self.classifier is not None:
             try:
                 scores = (
-                    self.classifier.predict_proba(x)[:, 1]
+                    xgb_predict_proba(self.classifier, x)[:, 1]
                     if hasattr(self.classifier, "predict_proba")
                     else self.classifier.predict(x)
                 )

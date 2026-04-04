@@ -69,7 +69,13 @@ class TestSubgraphFeatures:
 class TestFeatureService:
     def test_compute_all_features_returns_all_keys(self, sample_transactions, sample_graph):
         result = compute_all_features(sample_transactions, sample_graph)
-        expected_keys = {"transaction_features", "graph_features", "subgraph_features", "combined"}
+        expected_keys = {
+            "transaction_features",
+            "graph_features",
+            "subgraph_features",
+            "combined",
+            "node_features",
+        }
         assert set(result.keys()) == expected_keys
 
     def test_empty_graph_still_returns_keys(self, sample_transactions):

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 
-from app.ml.ml_device import resolve_torch_device
+from app.ml.ml_device import resolve_torch_device, xgb_predict_proba
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -70,7 +70,7 @@ class BehavioralLens:
         behavioral_score = np.zeros(X.shape[0])
         anomaly_score = np.zeros(X.shape[0])
         if self.xgb_model is not None:
-            behavioral_score = self.xgb_model.predict_proba(X)[:, 1] if hasattr(self.xgb_model, 'predict_proba') else self.xgb_model.predict(X)
+            behavioral_score = xgb_predict_proba(self.xgb_model, X)[:, 1] if hasattr(self.xgb_model, 'predict_proba') else self.xgb_model.predict(X)
         if self.autoencoder is not None:
             device = self._device or resolve_torch_device()
             self.autoencoder.eval()
