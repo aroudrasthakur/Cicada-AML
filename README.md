@@ -8,7 +8,7 @@ A hybrid system that classifies transactions and wallet clusters as suspicious, 
 
 - **Backend**: FastAPI (Python) with stacked ML pipeline
 - **Frontend**: React + Vite + TypeScript + Tailwind CSS + Cytoscape.js
-- **Database**: Supabase (PostgreSQL)
+- **Database**: Supabase (PostgreSQL only for demo — datasets, reports, and model files stay on disk under `data/` and `models/`; no Supabase Storage)
 - **ML Pipeline**: 185-typology heuristic engine → 6 lens-specific models → XGBoost meta-learner
 
 ## Quick Start
