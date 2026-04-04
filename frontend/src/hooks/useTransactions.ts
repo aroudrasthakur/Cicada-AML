@@ -25,7 +25,7 @@ export function useTransactions(params?: {
     } finally {
       setLoading(false);
     }
-  }, [params?.page, params?.limit, params?.label, params?.min_risk]);
+  }, [params]);
 
   useEffect(() => {
     void refetch();

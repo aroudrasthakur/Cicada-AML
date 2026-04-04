@@ -33,7 +33,7 @@ const NAV_MAIN: {
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, badge: "3" },
   { to: "/dashboard/transactions", label: "Transactions", icon: ArrowLeftRight, badge: "1.2k" },
   { to: "/dashboard/wallets", label: "Wallets", icon: Wallet, badge: null },
-  { to: "/dashboard/networks", label: "Network Cases", icon: Network, badge: "7" },
+  { to: "/dashboard/networks", label: "Network cases", icon: Network, badge: "7" },
 ];
 
 const NAV_ANALYSIS: {
@@ -42,7 +42,7 @@ const NAV_ANALYSIS: {
   icon: LucideIcon;
   badge: string | null;
 }[] = [
-  { to: "/dashboard/explorer", label: "Flow Explorer", icon: GitBranch, badge: null },
+  { to: "/dashboard/explorer", label: "Flow explorer", icon: GitBranch, badge: null },
   { to: "/dashboard/reports", label: "Reports", icon: FileText, badge: null },
 ];
 
@@ -114,6 +114,9 @@ function DashboardShell() {
   );
   const isDashboardHome =
     location.pathname === "/dashboard" || location.pathname === "/dashboard/";
+  const isFlowExplorer =
+    location.pathname === "/dashboard/explorer" ||
+    location.pathname === "/dashboard/explorer/";
   const overviewDate = new Date().toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -149,7 +152,7 @@ function DashboardShell() {
     <div className="flex min-h-screen bg-[#060810] text-[#e6edf3]">
       {logoutOpen && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-4 backdrop-blur-[2px]"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-4"
           role="presentation"
           onClick={() => setLogoutOpen(false)}
         >
@@ -203,12 +206,8 @@ function DashboardShell() {
               <Hexagon className="h-5 w-5 text-[#34d399]" aria-hidden />
             </span>
             <div>
-              <div className="font-display text-sm font-bold tracking-tight text-[#e6edf3]">
-                AEGIS AML
-              </div>
-              <p className="font-mono text-[10px] uppercase tracking-wider text-[#6b7c90]">
-                Intelligence
-              </p>
+              <div className="font-display text-sm font-bold tracking-tight text-[#e6edf3]">AEGIS AML</div>
+              <p className="font-mono text-[10px] uppercase tracking-wider text-[#6b7c90]">Intelligence</p>
             </div>
           </div>
         </div>
@@ -264,9 +263,7 @@ function DashboardShell() {
               ) : (
                 <>
                   Last updated{" "}
-                  <span className="tabular-nums text-[#c8d4e0]">
-                    {new Date().toLocaleString()}
-                  </span>
+                  <span className="tabular-nums text-[#c8d4e0]">{new Date().toLocaleString()}</span>
                 </>
               )}
             </p>
@@ -291,6 +288,7 @@ function DashboardShell() {
             </button>
             <button
               type="button"
+              onClick={() => navigate("/dashboard/reports")}
               className="inline-flex items-center gap-2 rounded-lg border border-[#34d399]/35 bg-[#34d399]/10 px-3 py-2 font-data text-xs text-[#6ee7b7]"
             >
               <FileWarning className="h-4 w-4" aria-hidden />
@@ -311,10 +309,16 @@ function DashboardShell() {
           </div>
         </header>
 
-        <RunStatusBar />
-        {isDashboardHome && <ScoringModeBanner variant="strip" />}
+        {!isFlowExplorer && <RunStatusBar />}
+        {isDashboardHome && !isFlowExplorer && <ScoringModeBanner variant="strip" />}
 
-        <main className="flex-1 px-6 py-6">
+        <main
+          className={
+            isFlowExplorer
+              ? "flex min-h-0 flex-1 flex-col overflow-hidden bg-[#060810]"
+              : "min-h-0 flex-1 overflow-auto px-6 py-6"
+          }
+        >
           <Outlet />
         </main>
       </div>

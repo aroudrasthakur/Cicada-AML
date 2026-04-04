@@ -20,7 +20,7 @@ export function useNetworkCases(params?: { page?: number; limit?: number }) {
     } finally {
       setLoading(false);
     }
-  }, [params?.page, params?.limit]);
+  }, [params]);
 
   useEffect(() => {
     void refetch();

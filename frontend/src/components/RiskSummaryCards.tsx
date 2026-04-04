@@ -4,7 +4,7 @@ import { formatNumber } from "@/utils/formatters";
 import type { DashboardSummary } from "@/types/dashboard";
 import { SparklineBars } from "./SparklineBars";
 
-export interface RiskSummaryCardsProps extends DashboardSummary {}
+export type RiskSummaryCardsProps = DashboardSummary;
 
 function deltaText(delta: number | undefined): string {
   if (delta == null || Number.isNaN(delta)) return "—";
