@@ -11,6 +11,13 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+BEHAVIORAL_FEATURE_ORDER = [
+    "amount", "log_amount", "fee_ratio", "is_round_amount",
+    "burstiness_score", "amount_deviation", "sender_tx_count",
+    "receiver_tx_count", "sender_repeat_count",
+    "balance_ratio", "unique_counterparties", "relay_pattern_score",
+]
+
 
 class BehavioralAutoencoder(nn.Module):
     def __init__(self, input_dim: int, latent_dim: int = 32):
@@ -42,20 +49,15 @@ class BehavioralLens:
         self._device = None
 
     def _select_features(self, features_df: pd.DataFrame, heuristic_scores: np.ndarray) -> np.ndarray:
-        """Select the same behavioral features used during training.
-
-        The XGBoost model and scaler were trained on the 12 named columns only.
-        The raw 185-element heuristic vector is intentionally excluded to keep
-        the feature space aligned with training.
-        """
-        behavioral_cols = [c for c in features_df.columns if c in {
-            "amount", "log_amount", "fee_ratio", "is_round_amount",
-            "burstiness_score", "amount_deviation", "sender_tx_count",
-            "receiver_tx_count", "sender_repeat_count",
-            "balance_ratio", "unique_counterparties", "relay_pattern_score",
-        }]
-        feat = features_df[behavioral_cols].fillna(0).values if behavioral_cols else np.zeros((len(features_df), 1))
-        return feat.astype(np.float32)
+        """12 columns in fixed order (must match train_behavioral / scaler)."""
+        n = len(features_df)
+        if features_df.empty or n == 0:
+            return np.zeros((0, len(BEHAVIORAL_FEATURE_ORDER)), dtype=np.float32)
+        out = np.zeros((n, len(BEHAVIORAL_FEATURE_ORDER)), dtype=np.float32)
+        for j, name in enumerate(BEHAVIORAL_FEATURE_ORDER):
+            if name in features_df.columns:
+                out[:, j] = features_df[name].fillna(0).to_numpy(dtype=np.float64)
+        return out
 
     def predict(self, features_df: pd.DataFrame, heuristic_scores: np.ndarray = None) -> dict:
         """Run inference. Returns behavioral_score and behavioral_anomaly_score."""

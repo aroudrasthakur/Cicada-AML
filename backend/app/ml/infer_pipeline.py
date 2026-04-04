@@ -83,24 +83,117 @@ class InferencePipeline:
         self._loaded = True
         logger.info("All models loaded")
 
+    # ------------------------------------------------------------------
+    # Batch-level pre-computation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_wallet_profiles(
+        transactions: list[dict[str, Any]],
+        graph: nx.DiGraph,
+    ) -> dict[str, dict[str, Any]]:
+        """Build a per-wallet summary dict used by heuristics.
+
+        Each entry has the shape expected by heuristic ``wallet`` param:
+        ``{"address": str, "total_in": float, "total_out": float, ...}``
+        """
+        profiles: dict[str, dict[str, Any]] = {}
+
+        for tx in transactions:
+            sender = str(tx.get("sender_wallet") or tx.get("sender", ""))
+            receiver = str(tx.get("receiver_wallet") or tx.get("receiver", ""))
+            amount = float(tx.get("amount", 0))
+            ts = tx.get("timestamp", "")
+
+            for addr in (sender, receiver):
+                if not addr:
+                    continue
+                if addr not in profiles:
+                    profiles[addr] = {
+                        "address": addr,
+                        "total_in": 0.0,
+                        "total_out": 0.0,
+                        "tx_count": 0,
+                        "amounts": [],
+                        "timestamps": [],
+                        "first_seen": ts,
+                        "last_seen": ts,
+                    }
+
+            if sender:
+                profiles[sender]["total_out"] += amount
+                profiles[sender]["tx_count"] += 1
+                profiles[sender]["amounts"].append(amount)
+                profiles[sender]["timestamps"].append(ts)
+                if ts and ts < profiles[sender]["first_seen"]:
+                    profiles[sender]["first_seen"] = ts
+                if ts and ts > profiles[sender]["last_seen"]:
+                    profiles[sender]["last_seen"] = ts
+
+            if receiver:
+                profiles[receiver]["total_in"] += amount
+                profiles[receiver]["tx_count"] += 1
+                profiles[receiver]["amounts"].append(amount)
+                profiles[receiver]["timestamps"].append(ts)
+                if ts and ts < profiles[receiver]["first_seen"]:
+                    profiles[receiver]["first_seen"] = ts
+                if ts and ts > profiles[receiver]["last_seen"]:
+                    profiles[receiver]["last_seen"] = ts
+
+        for addr, p in profiles.items():
+            if graph.has_node(addr):
+                p["in_degree"] = graph.in_degree(addr)
+                p["out_degree"] = graph.out_degree(addr)
+            else:
+                p["in_degree"] = 0
+                p["out_degree"] = 0
+            p["pass_through_ratio"] = (
+                p["total_out"] / p["total_in"] if p["total_in"] > 0 else 0.0
+            )
+            # Approximate balance: what stays in the wallet
+            p["balances"] = [max(p["total_in"] - p["total_out"], 0.0)]
+
+        return profiles
+
+    @staticmethod
+    def _build_tx_context(
+        tx: dict[str, Any],
+        wallet_profile: dict[str, Any],
+        global_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge global context with per-wallet data for heuristic evaluation."""
+        ctx = dict(global_context)
+        ctx["amount"] = wallet_profile.get("amounts", [])
+        ctx["balances"] = wallet_profile.get("balances", [])
+        ctx["timestamps"] = wallet_profile.get("timestamps", [])
+        ctx["total_in"] = wallet_profile.get("total_in", 0)
+        ctx["total_out"] = wallet_profile.get("total_out", 0)
+        ctx["tx_count"] = wallet_profile.get("tx_count", 0)
+        return ctx
+
+    # ------------------------------------------------------------------
+
     def score_transactions(
         self,
         transactions: list[dict[str, Any]],
         graph: nx.DiGraph | None = None,
         context: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Full pipeline: features → heuristics → lenses → meta → threshold → results."""
+        """Full pipeline: features -> heuristics -> lenses -> meta -> threshold -> results."""
         if not self._loaded:
             self.load_models()
 
         context = context or {}
-        
-        # Build graph if not provided
+
         if graph is None:
             from app.services.graph_service import build_wallet_graph
             graph = build_wallet_graph(transactions)
-            logger.info("Built graph from transactions: %d nodes, %d edges", 
-                       graph.number_of_nodes(), graph.number_of_edges())
+            logger.info("Built graph from transactions: %d nodes, %d edges",
+                        graph.number_of_nodes(), graph.number_of_edges())
+
+        # --- 0. Pre-compute wallet profiles for heuristics ---
+        wallet_profiles = self._build_wallet_profiles(transactions, graph)
+        logger.info("Built wallet profiles for %d addresses", len(wallet_profiles))
 
         # --- 1. Feature extraction ---
         all_features = compute_all_features(transactions, graph)
@@ -117,14 +210,19 @@ class InferencePipeline:
         results = []
         for i, tx in enumerate(transactions):
             row_features = combined.iloc[[i]] if i < len(combined) else pd.DataFrame()
+            feat_dict = row_features.to_dict("records")[0] if not row_features.empty else {}
 
             # --- 2. Heuristics (always first) ---
+            wallet_id = str(tx.get("sender_wallet") or tx.get("sender", ""))
+            wallet_prof = wallet_profiles.get(wallet_id, {"address": wallet_id})
+            tx_ctx = self._build_tx_context(tx, wallet_prof, context)
+
             h_result = run_heuristics(
                 tx=tx,
-                wallet=tx.get("sender_wallet") or tx.get("sender"),
+                wallet=wallet_prof,
                 graph=graph,
-                features=row_features.to_dict("records")[0] if not row_features.empty else {},
-                context=context,
+                features=feat_dict,
+                context=tx_ctx,
             )
             h_vec = np.array(h_result["heuristic_vector"], dtype=np.float32)
 

@@ -95,6 +95,23 @@ def compute_all_features(
             num_cols = combined.select_dtypes(include=["float64", "float32", "int64", "int32"]).columns
             combined[num_cols] = combined[num_cols].fillna(0)
 
+            # Training stores sender graph metrics without prefix; lenses select these names.
+            for col in (
+                "balance_ratio",
+                "unique_counterparties",
+                "relay_pattern_score",
+                "fan_in_ratio",
+                "weighted_in",
+                "in_degree",
+                "suspicious_neighbor_ratio_1hop",
+                "suspicious_neighbor_ratio_2hop",
+            ):
+                src = f"sender_graph_{col}"
+                if src in combined.columns:
+                    combined[col] = combined[src]
+                elif col not in combined.columns:
+                    combined[col] = 0.0
+
     return {
         "transaction_features": transaction_features,
         "graph_features": graph_features,

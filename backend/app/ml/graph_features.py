@@ -68,12 +68,14 @@ def compute_graph_features(
 
         tv = float(nf.get("total_volume", wi + wo) or 0.0)
         relay_raw = (ideg * odeg) / (tv + 1.0)
+        bal = float(nf.get("balance_ratio", 0.0) or 0.0)
 
         rows.append(
             {
                 "node_id": n,
                 "in_degree": ideg,
                 "out_degree": odeg,
+                "balance_ratio": bal,
                 "weighted_in": wi,
                 "weighted_out": wo,
                 "fan_in_ratio": fan_in,
