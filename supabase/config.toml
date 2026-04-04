@@ -1,2 +1,8 @@
 [project]
 id = "aegis-aml"
+
+# Sign-up confirmation email: OTP only (no confirmation link).
+# For hosted Supabase, copy this HTML into Dashboard → Authentication → Email Templates → Confirm signup.
+[auth.email.template.confirmation]
+subject = "Your Aegis AML verification code"
+content_path = "./supabase/templates/confirm_signup_otp.html"

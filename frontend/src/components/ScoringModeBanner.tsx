@@ -11,7 +11,7 @@ export default function ScoringModeBanner({ variant = "card" }: { variant?: Vari
         {mode.replace(/_/g, " ")} active
       </span>
       <span className="text-[var(--color-aegis-border)]">·</span>
-      <span>6 lens models + 185 heuristics</span>
+      <span>5 lens models + 185 heuristics</span>
       <span className="text-[var(--color-aegis-border)]">·</span>
       <span>
         Precision@50{" "}

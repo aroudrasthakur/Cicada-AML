@@ -5,7 +5,6 @@ const ORDER: { key: keyof LensSignalScores; title: string; color: string }[] = [
   { key: "graph", title: "Graph", color: "bg-[#7c5cfc]" },
   { key: "entity", title: "Entity", color: "bg-[#f59e0b]" },
   { key: "temporal", title: "Temporal", color: "bg-[#38bdf8]" },
-  { key: "document", title: "Document", color: "bg-[#a78bfa]" },
   { key: "offramp", title: "Off-ramp", color: "bg-[#ff4d6d]" },
 ];
 

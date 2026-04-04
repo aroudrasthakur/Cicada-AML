@@ -9,7 +9,6 @@ export interface LensContributions {
   graph: number;
   entity: number;
   temporal: number;
-  document: number;
   offramp: number;
 }
 

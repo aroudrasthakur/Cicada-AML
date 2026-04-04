@@ -39,14 +39,13 @@ const LENS_CARDS = [
   { name: "Graph", desc: "GAT/GCN on wallet graphs.", tag: "PyG" },
   { name: "Entity", desc: "Louvain clusters & cluster risk.", tag: "Community" },
   { name: "Temporal", desc: "LSTM over wallet sequences.", tag: "Sequence" },
-  { name: "Document", desc: "Metadata & narrative consistency.", tag: "XGB" },
   { name: "Off-ramp", desc: "Exit & conversion patterns.", tag: "XGB" },
 ] as const;
 
 const TICKER_ITEMS = [
   "TX 0x7a3… flagged · T-014 Layering · risk 0.91",
   "Wallet bc1q… · peel chain · CRITICAL",
-  "Typology T-042 mixer · 6 lenses active",
+  "Typology T-042 mixer · 5 lenses active",
   "Recall@50 0.91 · PR-AUC 0.88 · analyst efficiency 3.2×",
   "Heuristic H-203 triggered · confidence 0.94",
 ];
@@ -124,7 +123,7 @@ export default function LandingPage() {
           <span className="text-[#34d399]/95">Investigate.</span>
         </h1>
         <p className="mt-6 max-w-2xl font-data text-base leading-relaxed text-[#9aa7b8]">
-          Heuristics-first AML for blockchain flows: six lenses, meta-learner fusion, and
+          Heuristics-first AML for blockchain flows: five lenses, meta-learner fusion, and
           investigator-ready narratives — without noisy gradients on your surfaces.
         </p>
         <div className="mt-10 flex flex-wrap gap-4">
@@ -159,7 +158,7 @@ export default function LandingPage() {
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           {[
             { k: "185", l: "Typologies" },
-            { k: "6", l: "Models" },
+            { k: "5", l: "Models" },
             { k: "0.91", l: "Recall@50" },
             { k: "3.2×", l: "Analyst efficiency" },
           ].map((s) => (
@@ -204,7 +203,7 @@ export default function LandingPage() {
       </Reveal>
 
       <Reveal className="mx-auto max-w-6xl px-6 py-12" id="lenses">
-        <h2 className="font-display text-2xl font-bold">Six lenses</h2>
+        <h2 className="font-display text-2xl font-bold">Five lenses</h2>
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {LENS_CARDS.map((c) => (
             <div

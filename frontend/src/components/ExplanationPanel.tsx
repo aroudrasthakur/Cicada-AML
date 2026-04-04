@@ -13,7 +13,6 @@ const LENS_KEYS = [
   { key: "graph", label: "Graph" },
   { key: "entity", label: "Entity" },
   { key: "temporal", label: "Temporal" },
-  { key: "document", label: "Document" },
   { key: "offramp", label: "Off-ramp" },
 ] as const;
 

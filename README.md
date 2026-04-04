@@ -114,6 +114,8 @@ cp .env.example .env
 ```bash
 cd ../frontend
 npm install
+cp .env.example .env
+# Edit .env with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY
 ```
 
 5. **Run the Application**
@@ -133,6 +135,11 @@ npm run dev
 ```
 
 Visit `http://localhost:5173` to access the dashboard.
+
+For auth flows (signup OTP + password reset), add the following redirect URLs in Supabase Auth settings:
+
+- `http://localhost:5173/login`
+- `http://localhost:5173/reset-password`
 
 ---
 

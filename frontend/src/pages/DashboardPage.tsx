@@ -7,7 +7,7 @@ import TypologyHeatmap from "@/components/TypologyHeatmap";
 import ModelPerformanceChart from "@/components/ModelPerformanceChart";
 import type { TransactionQueueRow } from "@/types/transaction";
 import type {
-  LensScores6,
+  LensScores5,
   LiveAlertItem,
   ModelPerformanceMetric,
   TriggeredHeuristicRow,
@@ -19,7 +19,6 @@ function defaultLens(): NonNullable<TransactionQueueRow["lens_scores"]> {
     graph: 0.2,
     entity: 0.2,
     temporal: 0.2,
-    document: 0.2,
     offramp: 0.2,
   };
 }
@@ -48,7 +47,6 @@ const MOCK_QUEUE: TransactionQueueRow[] = [
       graph: 0.94,
       entity: 0.72,
       temporal: 0.81,
-      document: 0.35,
       offramp: 0.68,
     },
   },
@@ -75,7 +73,6 @@ const MOCK_QUEUE: TransactionQueueRow[] = [
       graph: 0.55,
       entity: 0.62,
       temporal: 0.7,
-      document: 0.28,
       offramp: 0.81,
     },
   },
@@ -102,7 +99,6 @@ const MOCK_QUEUE: TransactionQueueRow[] = [
       graph: 0.86,
       entity: 0.78,
       temporal: 0.55,
-      document: 0.15,
       offramp: 0.48,
     },
   },
@@ -129,7 +125,6 @@ const MOCK_QUEUE: TransactionQueueRow[] = [
       graph: 0.48,
       entity: 0.52,
       temporal: 0.72,
-      document: 0.55,
       offramp: 0.4,
     },
   },
@@ -156,7 +151,6 @@ const MOCK_QUEUE: TransactionQueueRow[] = [
       graph: 0.12,
       entity: 0.1,
       temporal: 0.14,
-      document: 0.08,
       offramp: 0.11,
     },
   },
@@ -194,7 +188,6 @@ const MODEL_METRICS: ModelPerformanceMetric[] = [
   { name: "Graph", prAuc: 0.88, recall50: 0.85, precision50: 0.82, f1: 0.84, fpPer1k: 9 },
   { name: "Entity", prAuc: 0.79, recall50: 0.76, precision50: 0.74, f1: 0.75, fpPer1k: 15 },
   { name: "Temporal", prAuc: 0.81, recall50: 0.78, precision50: 0.77, f1: 0.78, fpPer1k: 11 },
-  { name: "Document", prAuc: 0.72, recall50: 0.7, precision50: 0.68, f1: 0.69, fpPer1k: 18 },
   { name: "Off-ramp", prAuc: 0.83, recall50: 0.8, precision50: 0.78, f1: 0.79, fpPer1k: 10 },
   { name: "Meta", prAuc: 0.9, recall50: 0.91, precision50: 0.82, f1: 0.86, fpPer1k: 7 },
 ];
@@ -234,14 +227,13 @@ export default function DashboardPage() {
     [selectedId],
   );
 
-  const radarScores: LensScores6 = useMemo(() => {
+  const radarScores: LensScores5 = useMemo(() => {
     const ls = selectedRow?.lens_scores ?? defaultLens();
     return {
       behavioral: ls.behavioral,
       graph: ls.graph,
       entity: ls.entity,
       temporal: ls.temporal,
-      document: ls.document,
       offramp: ls.offramp,
     };
   }, [selectedRow]);

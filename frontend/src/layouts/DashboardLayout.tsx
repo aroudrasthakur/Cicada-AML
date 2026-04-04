@@ -16,6 +16,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { ScoringModeProvider, useScoringMode } from "@/contexts/ScoringModeContext";
+import { useAuth } from "@/contexts/AuthContext";
 import ScoringModeBanner from "@/components/ScoringModeBanner";
 
 const NAV_MAIN: {
@@ -95,7 +96,9 @@ function NavBlock({
 function DashboardShell() {
   const [notif] = useState(4);
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const { mode } = useScoringMode();
+  const { profile, user, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const pageTitle = useMemo(
@@ -109,6 +112,31 @@ function DashboardShell() {
     day: "numeric",
     year: "numeric",
   });
+  const displayName = useMemo(() => {
+    if (profile) {
+      return `${profile.first_name} ${profile.last_name}`.trim();
+    }
+    const metadataName = [user?.user_metadata?.first_name, user?.user_metadata?.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (metadataName) return metadataName;
+    return user?.email ?? "Authenticated User";
+  }, [profile, user]);
+  const displaySecondary = useMemo(() => {
+    if (profile?.username) return `@${profile.username}`;
+    return user?.email ?? "Analyst";
+  }, [profile, user]);
+  const initials = useMemo(() => {
+    const source = displayName.split(" ").filter(Boolean);
+    if (source.length >= 2) {
+      return `${source[0][0]}${source[1][0]}`.toUpperCase();
+    }
+    if (source.length === 1) {
+      return source[0].slice(0, 2).toUpperCase();
+    }
+    return "AU";
+  }, [displayName]);
 
   return (
     <div className="flex min-h-screen bg-[#060810] text-[#e6edf3]">
@@ -141,13 +169,20 @@ function DashboardShell() {
               </button>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
+                  if (isLoggingOut) return;
+                  setIsLoggingOut(true);
+                  const { error } = await signOut();
+                  setIsLoggingOut(false);
                   setLogoutOpen(false);
-                  navigate("/login");
+                  navigate("/login", { replace: true });
+                  if (error) {
+                    console.error("Sign out failed:", error);
+                  }
                 }}
                 className="rounded-lg border border-[#f87171]/40 bg-[#f87171]/10 px-4 py-2 font-data text-sm font-medium text-[#fca5a5] hover:bg-[#f87171]/15"
               >
-                Sign out
+                {isLoggingOut ? "Signing out..." : "Sign out"}
               </button>
             </div>
           </div>
@@ -176,11 +211,11 @@ function DashboardShell() {
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#34d399]/15 font-display text-sm font-semibold text-[#6ee7b7]"
             aria-hidden
           >
-            JA
+            {initials}
           </div>
           <div className="min-w-0">
-            <p className="truncate font-data text-sm font-medium text-[#e6edf3]">Jamie Analyst</p>
-            <p className="truncate font-mono text-[10px] text-[#7d8a99]">Senior Investigator</p>
+            <p className="truncate font-data text-sm font-medium text-[#e6edf3]">{displayName}</p>
+            <p className="truncate font-mono text-[10px] text-[#7d8a99]">{displaySecondary}</p>
           </div>
         </div>
 

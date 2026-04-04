@@ -25,7 +25,6 @@ export interface LensSignalScores {
   graph: number;
   entity: number;
   temporal: number;
-  document: number;
   offramp: number;
 }
 
@@ -45,7 +44,6 @@ export interface TransactionScore {
   graph_score: number | null;
   entity_score: number | null;
   temporal_score: number | null;
-  document_score: number | null;
   offramp_score: number | null;
   meta_score: number | null;
   predicted_label: string | null;

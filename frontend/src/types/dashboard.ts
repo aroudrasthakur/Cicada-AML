@@ -32,12 +32,11 @@ export interface DashboardSummary {
   trends?: DashboardTrendNotes;
 }
 
-export interface LensScores6 {
+export interface LensScores5 {
   behavioral: number;
   graph: number;
   entity: number;
   temporal: number;
-  document: number;
   offramp: number;
 }
 

@@ -1,20 +1,19 @@
-import type { LensScores6 } from "@/types/dashboard";
+import type { LensScores5 } from "@/types/dashboard";
 
 export interface LensRadarChartProps {
-  scores: LensScores6;
+  scores: LensScores5;
   size?: number;
 }
 
-const LABELS: { key: keyof LensScores6; label: string }[] = [
+const LABELS: { key: keyof LensScores5; label: string }[] = [
   { key: "behavioral", label: "Behavioral" },
   { key: "graph", label: "Graph" },
   { key: "entity", label: "Entity" },
   { key: "temporal", label: "Temporal" },
-  { key: "document", label: "Document" },
   { key: "offramp", label: "Off-ramp" },
 ];
 
-/** Hexagonal radar: 6 axes, SVG only (no Plotly). */
+/** Pentagonal radar: 5 axes, SVG only (no Plotly). */
 export default function LensRadarChart({
   scores,
   size = 220,
@@ -22,7 +21,7 @@ export default function LensRadarChart({
   const cx = size / 2;
   const cy = size / 2 + 8;
   const rMax = size * 0.36;
-  const n = 6;
+  const n = 5;
   const points: string[] = [];
   const labelPos: { x: number; y: number; text: string }[] = [];
 
@@ -84,7 +83,7 @@ export default function LensRadarChart({
         viewBox={`0 0 ${size} ${size + 16}`}
         className="mx-auto block"
         role="img"
-        aria-label="Six lens scores radar chart"
+        aria-label="Five lens scores radar chart"
       >
         <defs>
           <filter id="radarGlow" x="-20%" y="-20%" width="140%" height="140%">

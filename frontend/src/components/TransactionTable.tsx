@@ -164,7 +164,6 @@ export default function TransactionTable({
                   graph: 0.2,
                   entity: 0.2,
                   temporal: 0.2,
-                  document: 0.2,
                   offramp: 0.2,
                 };
                 const lens = tx.lens_scores ?? defaultLens;
