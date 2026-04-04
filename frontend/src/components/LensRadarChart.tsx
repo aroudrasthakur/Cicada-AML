@@ -13,13 +13,16 @@ const LABELS: { key: keyof LensScores5; label: string }[] = [
   { key: "offramp", label: "Off-ramp" },
 ];
 
+/** Extra canvas padding so axis labels (especially left “Off-ramp”) are not clipped. */
+const LABEL_PAD = 44;
+
 /** Pentagonal radar: 5 axes, SVG only (no Plotly). */
 export default function LensRadarChart({
   scores,
   size = 220,
 }: LensRadarChartProps) {
-  const cx = size / 2;
-  const cy = size / 2 + 8;
+  const cx = LABEL_PAD + size / 2;
+  const cy = LABEL_PAD + size / 2 + 8;
   const rMax = size * 0.36;
   const n = 5;
   const points: string[] = [];
@@ -33,7 +36,7 @@ export default function LensRadarChart({
     const y = cy + r * Math.sin(angle);
     points.push(`${x},${y}`);
 
-    const lr = rMax + 22;
+    const lr = rMax + 26;
     labelPos.push({
       x: cx + lr * Math.cos(angle),
       y: cy + lr * Math.sin(angle),
@@ -72,16 +75,19 @@ export default function LensRadarChart({
     );
   });
 
+  const vbW = size + LABEL_PAD * 2;
+  const vbH = size + 16 + LABEL_PAD * 2;
+
   return (
     <div className="rounded-xl border border-[var(--color-aegis-border)] bg-[#0d1117] p-4">
       <p className="mb-2 font-data text-[10px] uppercase tracking-wider text-[var(--color-aegis-muted)]">
         Lens radar
       </p>
       <svg
-        width={size}
-        height={size + 16}
-        viewBox={`0 0 ${size} ${size + 16}`}
-        className="mx-auto block"
+        width={vbW}
+        height={vbH}
+        viewBox={`0 0 ${vbW} ${vbH}`}
+        className="mx-auto block max-w-full h-auto"
         role="img"
         aria-label="Five lens scores radar chart"
       >
@@ -111,7 +117,7 @@ export default function LensRadarChart({
             textAnchor="middle"
             dominantBaseline="middle"
             className="fill-[#9aa7b8] font-data"
-            style={{ fontSize: 9 }}
+            style={{ fontSize: 10 }}
           >
             {p.text}
           </text>

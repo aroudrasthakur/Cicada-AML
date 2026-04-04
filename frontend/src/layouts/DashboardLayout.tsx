@@ -147,7 +147,7 @@ function DashboardShell() {
   }, [displayName]);
 
   return (
-    <div className="flex min-h-screen bg-[#060810] text-[#e6edf3]">
+    <div className={`flex bg-[#060810] text-[#e6edf3] ${isFlowExplorer ? "h-screen max-h-screen overflow-hidden" : "min-h-screen"}`}>
       {logoutOpen && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-4"
@@ -249,8 +249,8 @@ function DashboardShell() {
         </div>
       </aside>
 
-      <div className="ml-[240px] flex min-h-screen flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-aegis-border)] bg-[#060810]/95 px-6 py-4 backdrop-blur-sm">
+      <div className={`ml-[240px] flex min-w-0 flex-1 flex-col ${isFlowExplorer ? "h-screen max-h-screen" : "min-h-screen"}`}>
+        <header className={`z-30 flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--color-aegis-border)] bg-[#060810]/95 px-6 backdrop-blur-sm ${isFlowExplorer ? "py-2" : "sticky top-0 py-4"}`}>
           <div>
             <h1 className="font-display text-lg font-semibold text-[#e6edf3]">{pageTitle}</h1>
             <p className="font-data text-[11px] text-[var(--color-aegis-muted)]">
@@ -313,7 +313,7 @@ function DashboardShell() {
           className={
             isFlowExplorer
               ? "flex min-h-0 flex-1 flex-col overflow-hidden bg-[#060810]"
-              : "min-h-0 flex-1 overflow-auto px-6 py-6"
+              : "min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-6 py-6"
           }
         >
           <Outlet />

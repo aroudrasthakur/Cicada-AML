@@ -1,4 +1,11 @@
-import type { FlowCluster, FlowEdge, FlowExplorerNode, FlowTxRow, FlowWalletRow } from "@/types/flowExplorer";
+import type {
+  FlowCluster,
+  FlowEdge,
+  FlowExplorerNode,
+  FlowHeuristicChip,
+  FlowTxRow,
+  FlowWalletRow,
+} from "@/types/flowExplorer";
 import type { RunCluster, RunGraphSnapshot, RunSuspiciousTx } from "@/types/run";
 
 function formatWallet(id: string): string {
@@ -17,6 +24,7 @@ function formatAmount(v: unknown): string {
 }
 
 function riskLabelFromScore(r: number): string {
+  if (!Number.isFinite(r) || r <= 0) return "—";
   if (r >= 0.85) return "Critical";
   if (r >= 0.65) return "High";
   if (r >= 0.45) return "Elevated";
@@ -24,10 +32,68 @@ function riskLabelFromScore(r: number): string {
 }
 
 function riskColorFromScore(r: number): string {
+  if (!Number.isFinite(r) || r <= 0) return "#6b7c90";
   if (r >= 0.85) return "#EF4444";
   if (r >= 0.65) return "#F97316";
   if (r >= 0.45) return "#F59E0B";
   return "#34d399";
+}
+
+function meanMetaScores(sus: RunSuspiciousTx[]): number | null {
+  const vals = sus
+    .map((t) => t.meta_score)
+    .filter((m): m is number => typeof m === "number" && Number.isFinite(m));
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+/** Cluster AML risk: mean meta_score of suspicious txs in cluster when present, else DB ``risk_score``. */
+function clusterRiskFromRunData(cluster: RunCluster, sus: RunSuspiciousTx[]): number {
+  const mm = meanMetaScores(sus);
+  if (mm != null) return Math.min(1, Math.max(0, mm));
+  const rs = cluster.risk_score;
+  if (typeof rs === "number" && Number.isFinite(rs)) {
+    return Math.min(1, Math.max(0, rs));
+  }
+  return 0;
+}
+
+const HEURISTIC_CHIP_STYLES: { color: string; bg: string; border: string }[] = [
+  { color: "#fda4af", bg: "#fda4af14", border: "#fda4af55" },
+  { color: "#fdba74", bg: "#fdba7414", border: "#fdba7455" },
+  { color: "#fde047", bg: "#fde04714", border: "#fde04755" },
+  { color: "#6ee7b7", bg: "#6ee7b714", border: "#6ee7b755" },
+  { color: "#93c5fd", bg: "#93c5fd14", border: "#93c5fd55" },
+  { color: "#c4b5fd", bg: "#c4b5fd14", border: "#c4b5fd55" },
+];
+
+function heuristicChipsFromSuspicious(sus: RunSuspiciousTx[]): FlowHeuristicChip[] {
+  const labels: string[] = [];
+  for (const t of sus) {
+    const arr = t.heuristic_triggered_labels;
+    if (Array.isArray(arr)) labels.push(...arr);
+  }
+  const unique = [...new Set(labels)].sort((a, b) => a.localeCompare(b));
+  return unique.map((label, i) => {
+    const c = HEURISTIC_CHIP_STYLES[i % HEURISTIC_CHIP_STYLES.length]!;
+    return { label, color: c.color, bg: c.bg, border: c.border };
+  });
+}
+
+function walletMaxMetaByAddress(sus: RunSuspiciousTx[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const t of sus) {
+    const score = t.meta_score;
+    if (typeof score !== "number" || !Number.isFinite(score)) continue;
+    const bump = (addr: string | null | undefined) => {
+      if (!addr) return;
+      const prev = m.get(addr) ?? 0;
+      if (score > prev) m.set(addr, score);
+    };
+    bump(t.sender_wallet);
+    bump(t.receiver_wallet);
+  }
+  return m;
 }
 
 /**
@@ -194,14 +260,24 @@ export function buildFlowClusterFromSnapshot(
 
   const roleById = assignEntryExitRoles(nodeIds, inCount, outCount);
 
+  const clusterRisk = clusterRiskFromRunData(cluster, suspiciousForCluster);
+  const walletMetaMax = walletMaxMetaByAddress(suspiciousForCluster);
+
   const layout = layoutCircle(nodeIds);
   const nodes: FlowExplorerNode[] = nodeIds.map((id) => {
     const meta = nodeMeta.get(id)!;
     const typ = roleById.get(id) ?? "layer";
-    const risk =
+    const fromGraph =
       typeof meta.meta === "number" && Number.isFinite(meta.meta)
         ? Math.min(1, Math.max(0, meta.meta))
-        : Math.min(1, Math.max(0, cluster.risk_score ?? 0.5));
+        : null;
+    const fromWallet = walletMetaMax.get(id);
+    const risk =
+      fromGraph != null
+        ? fromGraph
+        : typeof fromWallet === "number" && Number.isFinite(fromWallet)
+          ? Math.min(1, Math.max(0, fromWallet))
+          : clusterRisk;
     const pos = layout.get(id) ?? { rx: 0.5, ry: 0.5 };
     return {
       id,
@@ -233,7 +309,7 @@ export function buildFlowClusterFromSnapshot(
     amount: t.meta_score != null ? `${(t.meta_score * 100).toFixed(0)}% risk` : "—",
   }));
 
-  const risk = Math.min(1, Math.max(0, cluster.risk_score ?? 0.5));
+  const risk = clusterRiskFromRunData(cluster, suspiciousForCluster);
   const rc = riskColorFromScore(risk);
 
   return {
@@ -247,7 +323,7 @@ export function buildFlowClusterFromSnapshot(
     wallets: cluster.wallet_count,
     tx: cluster.tx_count,
     totalAmount: formatAmount(cluster.total_amount),
-    heuristics: [],
+    heuristics: heuristicChipsFromSuspicious(suspiciousForCluster),
     wlist,
     txlist,
     nodes,

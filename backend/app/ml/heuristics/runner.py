@@ -8,6 +8,9 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 TOTAL_HEURISTICS = 185
+# Treat any non-trivial confidence as a fired heuristic (some implementations set
+# confidence but omit ``triggered=True``).
+_CONFIDENCE_FIRED_EPS = 1e-9
 
 
 def run_all(
@@ -58,11 +61,14 @@ def run_all(
             if result.applicability != Applicability.APPLICABLE:
                 continue
             
-            heuristic_vector[hid - 1] = result.confidence
-            
-            if result.triggered:
+            conf = float(result.confidence) if result.confidence is not None else 0.0
+            heuristic_vector[hid - 1] = conf
+
+            fired = bool(result.triggered) or conf > _CONFIDENCE_FIRED_EPS
+            if fired:
                 triggered_ids.append(hid)
-                explanations[str(hid)] = result.explanation
+                if result.explanation:
+                    explanations[str(hid)] = result.explanation
                 
         except Exception as exc:
             logger.error(f"Heuristic {hid} ({getattr(h, 'name', '?')}) failed: {exc}")

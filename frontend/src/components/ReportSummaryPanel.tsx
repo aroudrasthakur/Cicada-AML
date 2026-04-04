@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import axios from "axios";
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import {
   fetchReportSummary,
@@ -44,8 +45,19 @@ export default function ReportSummaryPanel({ runId }: ReportSummaryPanelProps) {
         const data = await generateReportSummary(runId, force);
         setSummary(data);
       } catch (e) {
-        const msg =
-          e instanceof Error ? e.message : "Failed to generate summary";
+        let msg = "Failed to generate summary";
+        if (axios.isAxiosError(e)) {
+          const d = e.response?.data;
+          if (d && typeof d === "object" && "detail" in d) {
+            msg = String((d as { detail: unknown }).detail);
+          } else if (typeof d === "string") {
+            msg = d;
+          } else if (e.message) {
+            msg = e.message;
+          }
+        } else if (e instanceof Error) {
+          msg = e.message;
+        }
         setError(msg);
       } finally {
         setGenerating(false);
@@ -91,7 +103,8 @@ export default function ReportSummaryPanel({ runId }: ReportSummaryPanelProps) {
         <p className="mt-3 font-data text-xs text-red-400">{error}</p>
       )}
 
-      {!summary && !generating && (
+      {/* GET returns { summary_text: null, ... } when nothing cached — summary is still truthy */}
+      {!summary?.summary_text && !generating && (
         <div className="mt-4">
           <p className="font-data text-xs text-[var(--color-aegis-muted)]">
             No summary has been generated for this report yet.
@@ -115,9 +128,36 @@ export default function ReportSummaryPanel({ runId }: ReportSummaryPanelProps) {
 
       {summary?.summary_text && (
         <div className="mt-4">
-          <p className="whitespace-pre-wrap font-data text-xs leading-relaxed text-[#c8d4e0]">
-            {summary.summary_text}
-          </p>
+          <div className="rounded-xl border border-[#34d399]/40 bg-[#34d399]/10 pl-4 shadow-[inset_4px_0_0_0_rgba(52,211,153,0.55)]">
+            <div className="py-4 pr-4">
+              {(() => {
+                const lines = summary.summary_text.split("\n").filter((ln) => ln.trim());
+                if (lines.length === 1 && !lines[0]!.trim().startsWith("•")) {
+                  return (
+                    <p className="whitespace-pre-wrap font-data text-xs font-bold leading-snug tracking-wide text-[#e6edf3]">
+                      {lines[0]}
+                    </p>
+                  );
+                }
+                return (
+                  <div className="space-y-1.5">
+                    {lines.map((line, i) => {
+                      const body = line.replace(/^\s*[•\-*]\s*/, "").trim();
+                      return (
+                        <p
+                          key={i}
+                          className="flex gap-2.5 font-data text-xs font-bold leading-snug tracking-wide text-[#e6edf3]"
+                        >
+                          <span className="shrink-0 select-none font-bold text-[#34d399]">•</span>
+                          <span>{body || line}</span>
+                        </p>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
           <div className="mt-3 flex flex-wrap gap-4 font-data text-[10px] text-[var(--color-aegis-muted)]">
             {summary.summary_model && (
               <span>Model: {summary.summary_model}</span>

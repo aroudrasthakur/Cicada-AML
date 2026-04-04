@@ -190,6 +190,26 @@ def _parse_triggered_ids(raw: Any) -> list[Any]:
     return []
 
 
+def _heuristic_labels_for_ids(ids: list[int]) -> list[str]:
+    """Resolve stored heuristic IDs to registry names for API consumers."""
+    if not ids:
+        return []
+    try:
+        import app.ml.heuristics.traditional  # noqa: F401
+        import app.ml.heuristics.blockchain  # noqa: F401
+        import app.ml.heuristics.hybrid  # noqa: F401
+        import app.ml.heuristics.ai_enabled  # noqa: F401
+        from app.ml.heuristics import registry as hreg
+    except Exception:
+        logger.exception("heuristic registry unavailable; returning numeric labels")
+        return [f"Heuristic {i}" for i in ids]
+    out: list[str] = []
+    for i in ids:
+        h = hreg.get(i)
+        out.append(h.name if h else f"Heuristic {i}")
+    return out
+
+
 def get_enriched_suspicious_txns(run_id: str) -> list[dict]:
     """Merge ``run_suspicious_txns`` with ``run_transactions`` and ``run_scores`` by ``transaction_id``."""
     suspicious = get_suspicious_txns(run_id)
@@ -210,8 +230,14 @@ def get_enriched_suspicious_txns(run_id: str) -> list[dict]:
         tx = tx_by_id.get(tid) or {}
         sc = score_by_id.get(tid) or {}
         trig = _parse_triggered_ids(sc.get("heuristic_triggered"))
+        trig_ints: list[int] = []
+        for x in trig:
+            try:
+                trig_ints.append(int(x))
+            except (TypeError, ValueError):
+                continue
         h_count_raw = sc.get("heuristic_triggered_count")
-        heuristic_triggered_count = len(trig)
+        heuristic_triggered_count = len(trig_ints)
         if heuristic_triggered_count == 0 and h_count_raw is not None:
             try:
                 heuristic_triggered_count = int(h_count_raw)
@@ -241,6 +267,8 @@ def get_enriched_suspicious_txns(run_id: str) -> list[dict]:
             "temporal_score": sc.get("temporal_score"),
             "offramp_score": sc.get("offramp_score"),
             "heuristic_triggered_count": heuristic_triggered_count,
+            "heuristic_triggered": trig_ints,
+            "heuristic_triggered_labels": _heuristic_labels_for_ids(trig_ints),
             "heuristic_top_typology": sc.get("heuristic_top_typo"),
             "heuristic_top_confidence": sc.get("heuristic_top_conf"),
         }

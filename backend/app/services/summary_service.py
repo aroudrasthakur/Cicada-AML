@@ -12,18 +12,16 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v3"
 FALLBACK_MODEL = "deterministic-fallback"
 
-SYSTEM_PROMPT = """You are an AML compliance analyst assistant. Given a structured pipeline run report in JSON format, produce a concise, professional summary suitable for a Suspicious Activity Report (SAR) narrative.
+SYSTEM_PROMPT = """Given a pipeline run report as JSON, reply with at most 100 words total.
 
-Focus on:
-- Key findings: how many transactions were flagged, cluster patterns, dominant typologies
-- Risk assessment: what risk levels were observed and their distribution
-- Actionable items: which clusters or transactions warrant immediate investigation
-- Keep the summary under 500 words
-- Use plain language suitable for compliance officers
-- Do NOT include raw numbers from the JSON — synthesize and interpret"""
+Format: 4–6 short bullet lines. Start each line with "• " (bullet + space).
+
+Cover only: run scale (tx count, suspicious count, clusters, threshold in plain terms), risk-band takeaway, which transaction IDs to review first, cluster typology hint.
+
+No JSON dumps. No long sentences. Tight, scannable, plain English."""
 
 
 def _get_openai_client():
@@ -48,55 +46,84 @@ def _truncate_content(content: dict, max_chars: int = 12000) -> str:
     return text
 
 
+def _trim_to_max_words(text: str, max_words: int = 100) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    cut = " ".join(words[:max_words]).rstrip(".,;:")
+    return cut + "…"
+
+
+def _bullet_block(bullets: list[str]) -> str:
+    return "\n".join(f"• {b.strip()}" for b in bullets if b.strip())
+
+
+def _word_count(s: str) -> int:
+    return len(s.split())
+
+
+def _trim_bullets_to_max_words(bullets: list[str], max_words: int = 100) -> str:
+    """Drop from the end or shorten until the block is ≤ max_words."""
+    b = [x.strip() for x in bullets if x.strip()]
+    while b and _word_count(_bullet_block(b)) > max_words:
+        if len(b) == 1:
+            b[0] = _trim_to_max_words(b[0], max_words=max(12, max_words - 2))
+            break
+        b.pop()
+    return _bullet_block(b) if b else "• No report metrics available."
+
+
 def _generate_fallback_summary(content: dict[str, Any]) -> str:
-    """Build a concise narrative from structured report JSON when LLM is unavailable."""
-    lines: list[str] = []
+    """~100 words max, bullet lines, when LLM is unavailable."""
     summary = content.get("summary") or {}
-    total_tx = summary.get("total_transactions", 0)
-    sus = summary.get("suspicious_transactions", 0)
-    clusters = summary.get("cluster_count", 0)
+    total_tx = int(summary.get("total_transactions", 0) or 0)
+    sus = int(summary.get("suspicious_transactions", 0) or 0)
+    clusters = int(summary.get("cluster_count", 0) or 0)
     thr = summary.get("threshold_used")
-    lines.append("Pipeline run overview")
-    lines.append(
-        f"• Transactions analyzed: {total_tx}. Flagged as suspicious: {sus}. "
-        f"Wallet clusters identified: {clusters}.",
-    )
-    if thr is not None:
-        lines.append(f"• Decision threshold used for suspicious flagging: {thr}.")
+    thr_s = f"{float(thr):.4f}" if isinstance(thr, (int, float)) else "n/a"
+
+    bullets: list[str] = [
+        f"{total_tx} txs scored; {sus} suspicious; {clusters} clusters; threshold ≈ {thr_s}.",
+    ]
 
     dist = content.get("score_distribution") or {}
     if dist:
-        parts = [f"{k}: {v}" for k, v in dist.items() if v]
+        parts = [f"{k}:{v}" for k, v in dist.items() if v]
         if parts:
-            lines.append("• Risk band counts: " + ", ".join(parts) + ".")
+            bullets.append(f"Risk bands: {', '.join(parts)}—focus on non-bulk bands first.")
+    else:
+        bullets.append("Check the report table for risk-band counts; triage outliers.")
 
-    top = content.get("top_suspicious_transactions") or []
+    top = list(content.get("top_suspicious_transactions") or [])
+    top.sort(
+        key=lambda t: float(t.get("meta_score") if t.get("meta_score") is not None else 0.0),
+        reverse=True,
+    )
     if top:
-        lines.append("")
-        lines.append("Highest-risk transactions (sample):")
-        for t in top[:5]:
-            tid = t.get("transaction_id", "—")
-            ms = t.get("meta_score")
-            rl = t.get("risk_level", "—")
-            typ = t.get("typology") or "—"
-            lines.append(f"  – {tid}: meta_score={ms}, risk={rl}, typology={typ}")
+        ids = [str(t.get("transaction_id") or "?") for t in top[:4]]
+        try:
+            ms0 = float(top[0].get("meta_score") if top[0].get("meta_score") is not None else 0.0)
+        except (TypeError, ValueError):
+            ms0 = 0.0
+        rl = str(top[0].get("risk_level") or "—")
+        bullets.append(f"Review first (by score): {', '.join(ids)} (top ≈ {ms0:.4f}, {rl}).")
+    else:
+        bullets.append("Sort suspicious list by meta-score to pick review order.")
 
     cfs = content.get("cluster_findings") or []
-    if cfs:
-        lines.append("")
-        lines.append("Cluster highlights:")
-        for c in cfs[:5]:
-            lab = c.get("label") or c.get("cluster_id") or "Cluster"
-            typ = c.get("typology") or "—"
-            wc = c.get("wallet_count", "—")
-            lines.append(f"  – {lab}: typology={typ}, wallets≈{wc}")
+    themes: list[str] = []
+    for c in cfs[:6]:
+        t = str(c.get("typology") or "").strip()
+        if t and t not in themes:
+            themes.append(t)
+    if themes:
+        bullets.append(f"Cluster themes: {', '.join(themes[:4])}—trace wallets in Flow Explorer.")
+    elif clusters:
+        bullets.append("Open each cluster graph to see wallet links.")
+    else:
+        bullets.append("No clusters in this run; rely on per-tx scores.")
 
-    lines.append("")
-    lines.append(
-        "(This summary was generated locally from pipeline report JSON. "
-        "Set OPENAI_API_KEY for an LLM-written narrative.)",
-    )
-    return "\n".join(lines)
+    return _trim_bullets_to_max_words(bullets, max_words=100)
 
 
 def generate_run_report_summary(
@@ -136,7 +163,7 @@ def generate_run_report_summary(
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"Summarize this pipeline run report:\n\n{content_str}"},
                 ],
-                max_tokens=800,
+                max_tokens=220,
                 temperature=0.3,
             )
             summary_text = response.choices[0].message.content or ""

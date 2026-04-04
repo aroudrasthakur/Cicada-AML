@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FileText,
   ChevronRight,
@@ -9,8 +9,15 @@ import {
   Loader2,
 } from "lucide-react";
 import { useRunContext } from "@/contexts/useRunContext";
-import { fetchRunReport } from "@/api/runs";
-import type { PipelineRun, RunReport, RunReportContent } from "@/types/run";
+import { useThresholds } from "@/contexts/ThresholdProvider";
+import { fetchRunClusters, fetchRunReport } from "@/api/runs";
+import type { PipelineRun, RunCluster, RunReport, RunReportContent } from "@/types/run";
+import type { RiskTierConfig } from "@/utils/riskTiers";
+import {
+  resolveRiskTier,
+  riskTierBadgeClass,
+  riskTierLabel,
+} from "@/utils/riskTiers";
 import ReportSummaryPanel from "@/components/ReportSummaryPanel";
 
 export default function ReportsPage() {
@@ -133,8 +140,32 @@ function ReportDetail({
   report: RunReport;
   onBack: () => void;
 }) {
+  const { config: tierConfig } = useThresholds();
   const c: RunReportContent = report.content;
   const s = c.summary;
+  const [liveClusters, setLiveClusters] = useState<RunCluster[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRunClusters(report.run_id)
+      .then((rows) => {
+        if (!cancelled) setLiveClusters(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setLiveClusters(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [report.run_id]);
+
+  const clusterFindings = useMemo(() => {
+    const byId = new Map((liveClusters ?? []).map((row) => [row.id, row]));
+    return c.cluster_findings.map((cl) => ({
+      ...cl,
+      risk_score: byId.get(cl.cluster_id)?.risk_score ?? cl.risk_score,
+    }));
+  }, [c.cluster_findings, liveClusters]);
 
   return (
     <div className="space-y-6">
@@ -162,6 +193,40 @@ function ReportDetail({
       </div>
 
       <ReportSummaryPanel runId={report.run_id} />
+
+      {/* Cluster findings — uses same meta-score scale + thresholds as Transactions */}
+      {clusterFindings.length > 0 && (
+        <Section
+          icon={<Shield className="h-4 w-4 text-[#a78bfa]" />}
+          title="Cluster Findings"
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            {clusterFindings.map((cl) => (
+              <div
+                key={cl.cluster_id}
+                className="rounded-lg border border-[var(--color-aegis-border)] bg-[#060810] p-4"
+              >
+                <p className="font-data text-sm font-medium text-[#e6edf3]">
+                  {cl.label}
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-2 font-data text-xs text-[#9aa7b8]">
+                  <span>{cl.typology}</span>
+                  <span className="text-[#6b7c90]">·</span>
+                  <ClusterRiskMeta
+                    score={cl.risk_score}
+                    tierConfig={tierConfig}
+                  />
+                </div>
+                <div className="mt-2 flex gap-4 font-data text-[11px] text-[#7d8a99]">
+                  <span>{cl.wallet_count} wallets</span>
+                  <span>{cl.tx_count} txns</span>
+                  <span>${cl.total_amount.toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* Score distribution */}
       <Section
@@ -221,7 +286,11 @@ function ReportDetail({
                       {t.meta_score.toFixed(4)}
                     </td>
                     <td className="px-3 py-2">
-                      <RiskBadge level={t.risk_level} />
+                      <RiskTierBadge
+                        score={t.meta_score}
+                        tierConfig={tierConfig}
+                        backendLevel={t.risk_level}
+                      />
                     </td>
                     <td className="px-3 py-2 text-[11px]">{t.typology ?? "—"}</td>
                     <td className="px-3 py-2 tabular-nums">{t.behavioral_score.toFixed(3)}</td>
@@ -236,36 +305,60 @@ function ReportDetail({
           </div>
         </Section>
       )}
-
-      {/* Cluster findings */}
-      {c.cluster_findings.length > 0 && (
-        <Section
-          icon={<Shield className="h-4 w-4 text-[#a78bfa]" />}
-          title="Cluster Findings"
-        >
-          <div className="grid gap-3 sm:grid-cols-2">
-            {c.cluster_findings.map((cl) => (
-              <div
-                key={cl.cluster_id}
-                className="rounded-lg border border-[var(--color-aegis-border)] bg-[#060810] p-4"
-              >
-                <p className="font-data text-sm font-medium text-[#e6edf3]">
-                  {cl.label}
-                </p>
-                <p className="mt-1 font-data text-xs text-[#9aa7b8]">
-                  {cl.typology} · risk {(cl.risk_score * 100).toFixed(0)}%
-                </p>
-                <div className="mt-2 flex gap-4 font-data text-[11px] text-[#7d8a99]">
-                  <span>{cl.wallet_count} wallets</span>
-                  <span>{cl.tx_count} txns</span>
-                  <span>${cl.total_amount.toLocaleString()}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
     </div>
+  );
+}
+
+function ClusterRiskMeta({
+  score,
+  tierConfig,
+}: {
+  score: number;
+  tierConfig: RiskTierConfig | null;
+}) {
+  const tier = resolveRiskTier(score, tierConfig, null);
+  const pct = `${(Math.min(1, Math.max(0, score)) * 100).toFixed(1)}%`;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      {tier ? (
+        <span
+          className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${riskTierBadgeClass(tier)}`}
+        >
+          {riskTierLabel(tier)}
+        </span>
+      ) : (
+        <span className="rounded border border-[var(--color-aegis-border)] bg-[#0d1117] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-aegis-muted)]">
+          —
+        </span>
+      )}
+      <span className="tabular-nums text-[#c8d4e0]">{pct}</span>
+    </span>
+  );
+}
+
+function RiskTierBadge({
+  score,
+  tierConfig,
+  backendLevel,
+}: {
+  score: number;
+  tierConfig: RiskTierConfig | null;
+  backendLevel: string;
+}) {
+  const tier = resolveRiskTier(score, tierConfig, backendLevel);
+  if (!tier) {
+    return (
+      <span className="inline-block rounded border border-[var(--color-aegis-border)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-aegis-muted)]">
+        {backendLevel}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`inline-block rounded border px-1.5 py-0.5 font-mono text-[10px] ${riskTierBadgeClass(tier)}`}
+    >
+      {riskTierLabel(tier)}
+    </span>
   );
 }
 
@@ -316,20 +409,3 @@ function Section({
   );
 }
 
-function RiskBadge({ level }: { level: string }) {
-  const colors: Record<string, string> = {
-    high: "border-[#f87171]/30 bg-[#f87171]/10 text-[#fca5a5]",
-    medium: "border-[#facc15]/30 bg-[#facc15]/10 text-[#fde68a]",
-    "medium-low": "border-[#60a5fa]/30 bg-[#60a5fa]/10 text-[#93c5fd]",
-    low: "border-[#34d399]/30 bg-[#34d399]/10 text-[#6ee7b7]",
-  };
-  return (
-    <span
-      className={`inline-block rounded border px-1.5 py-0.5 font-mono text-[10px] ${
-        colors[level] ?? colors.low
-      }`}
-    >
-      {level}
-    </span>
-  );
-}

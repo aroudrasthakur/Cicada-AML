@@ -206,8 +206,8 @@ export default function FlowExplorerPage() {
   }, [hasCompletedRuns, clustersForRun, loadingLive]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#060810] text-[#e6edf3]">
-      <div className="flex shrink-0 items-stretch gap-2 border-b border-[var(--color-aegis-border)] px-3 py-1.5">
+    <div className="flex h-full max-h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden bg-[#060810] text-[#e6edf3]">
+      <div className="flex min-w-0 shrink-0 items-stretch gap-2 border-b border-[var(--color-aegis-border)] px-3 py-1.5">
         <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
           {clusterTabs.map((tab, tabIndex) => {
             const active = tabIndex === clusterIdx;
@@ -254,7 +254,7 @@ export default function FlowExplorerPage() {
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <FlowCanvas
           cluster={cluster}
           selectedNodeId={selectedNodeId}
@@ -264,7 +264,7 @@ export default function FlowExplorerPage() {
           typologyBadge={cluster.typologyShort}
         />
 
-        <aside className="aegis-scroll flex w-[295px] shrink-0 flex-col overflow-y-auto border-l border-[var(--color-aegis-border)] bg-[#0d1117] p-4">
+        <aside className="aegis-scroll flex w-[min(300px,40vw)] shrink-0 flex-col overflow-y-auto border-l border-[var(--color-aegis-border)] bg-[#0d1117] p-3 sm:w-[320px] sm:p-4">
           <p className="font-data text-[9px] text-[#6b7c90]">{cluster.typology}</p>
           <h2 className="font-display text-[15px] font-bold text-[#e6edf3]">
             {cluster.name}
@@ -329,7 +329,9 @@ export default function FlowExplorerPage() {
             <div className="mt-2 flex flex-wrap gap-1.5">
               {cluster.heuristics.length === 0 ? (
                 <span className="font-data text-[10px] text-[#6b7c90]">
-                  {hasCompletedRuns ? "See run report for details" : "—"}
+                  {hasCompletedRuns
+                    ? "No heuristic triggers on this cluster's suspicious transactions"
+                    : "—"}
                 </span>
               ) : (
                 cluster.heuristics.map((h) => (
@@ -435,7 +437,7 @@ export default function FlowExplorerPage() {
           const node = cluster.nodes.find((n) => n.id === selectedNodeId);
           if (!node) return null;
           return (
-            <aside className="flex w-[300px] shrink-0 flex-col border-l border-[var(--color-aegis-border)] bg-[#0d1117]">
+            <aside className="flex w-[min(300px,40vw)] shrink-0 flex-col overflow-hidden border-l border-[var(--color-aegis-border)] bg-[#0d1117] sm:w-[320px]">
               <NodeInspectPanel
                 runId={selectedRunId}
                 nodeLabel={node.label}

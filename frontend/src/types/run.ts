@@ -68,6 +68,10 @@ export interface RunSuspiciousTx {
   temporal_score?: number | null;
   offramp_score?: number | null;
   heuristic_triggered_count?: number;
+  /** Heuristic IDs that fired (from ``run_scores.heuristic_triggered``). */
+  heuristic_triggered?: number[];
+  /** Human-readable names aligned with ``heuristic_triggered``. */
+  heuristic_triggered_labels?: string[];
   heuristic_top_typology?: string | null;
   heuristic_top_confidence?: number | null;
 }

@@ -142,7 +142,7 @@ export default function TransactionsPage() {
                 Transactions
               </h1>
               <p className="mt-1 max-w-xl font-data text-sm leading-relaxed text-[var(--color-aegis-muted)]">
-                Suspicious transactions from the selected pipeline run. Paginate to keep the table on
+                Suspicious transactions from the selected pipeline run
                 one screen.
                 {focus && (
                   <span className="ml-2 text-[var(--color-aegis-green)]">· focus {focus}</span>

@@ -27,4 +27,6 @@ def test_fallback_summary_includes_key_metrics():
     assert "100" in text
     assert "5" in text
     assert "TXN001" in text
-    assert "deterministic" in text.lower() or "locally" in text.lower()
+    assert "•" in text
+    wc = len(text.split())
+    assert wc <= 110, f"expected ≤~100 words, got {wc}"

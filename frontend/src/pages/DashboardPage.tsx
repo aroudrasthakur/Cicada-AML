@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Flame, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Flame, Loader2 } from "lucide-react";
 import RiskSummaryCards from "@/components/RiskSummaryCards";
 import TransactionTable from "@/components/TransactionTable";
 import LensRadarChart from "@/components/LensRadarChart";
@@ -26,6 +26,8 @@ import type {
 import { formatScore4 } from "@/utils/formatters";
 import { mapEnrichedSuspiciousToQueueRow } from "@/utils/suspiciousQueueRow";
 
+const DASH_QUEUE_PAGE_SIZE = 10;
+
 function greetingForNow(): string {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
@@ -43,6 +45,7 @@ export default function DashboardPage() {
   const [queue, setQueue] = useState<TransactionQueueRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [queueFilter, setQueueFilter] = useState<"all" | "critical">("all");
+  const [queuePage, setQueuePage] = useState(1);
   const [loading, setLoading] = useState(true);
 
   // Page-local run selection (not global activeRun)
@@ -133,6 +136,21 @@ export default function DashboardPage() {
     }
     return queue;
   }, [queue, queueFilter, tierConfig]);
+
+  const queueTotalPages = Math.max(1, Math.ceil(filteredQueue.length / DASH_QUEUE_PAGE_SIZE));
+
+  useEffect(() => {
+    setQueuePage(1);
+  }, [selectedRunId, queueFilter]);
+
+  useEffect(() => {
+    setQueuePage((p) => Math.min(Math.max(1, p), queueTotalPages));
+  }, [queueTotalPages]);
+
+  const pagedQueue = useMemo(() => {
+    const start = (queuePage - 1) * DASH_QUEUE_PAGE_SIZE;
+    return filteredQueue.slice(start, start + DASH_QUEUE_PAGE_SIZE);
+  }, [filteredQueue, queuePage]);
 
   useEffect(() => {
     if (selectedId == null) return;
@@ -261,7 +279,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6 overflow-x-hidden">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="font-display text-2xl font-semibold text-[#e6edf3]">
@@ -295,7 +313,7 @@ export default function DashboardPage() {
 
       <RiskSummaryCards {...summary} />
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_320px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">
         <div className="min-w-0 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -337,12 +355,52 @@ export default function DashboardPage() {
           </div>
 
           {queue.length > 0 ? (
-            <TransactionTable
-              transactions={filteredQueue}
-              variant="queue"
-              selectedId={selectedId}
-              onSelect={(id) => setSelectedId(id)}
-            />
+            <div className="space-y-3">
+              <TransactionTable
+                transactions={pagedQueue}
+                variant="queue"
+                compact
+                selectedId={selectedId}
+                onSelect={(id) => setSelectedId(id)}
+              />
+              {filteredQueue.length > DASH_QUEUE_PAGE_SIZE && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--color-aegis-border)] bg-[#060810]/50 px-3 py-2.5 font-data text-[11px] text-[var(--color-aegis-muted)]">
+                  <span>
+                    <span className="tabular-nums text-[#c8d4e0]">
+                      {(queuePage - 1) * DASH_QUEUE_PAGE_SIZE + 1}
+                      –
+                      {Math.min(queuePage * DASH_QUEUE_PAGE_SIZE, filteredQueue.length)}
+                    </span>{" "}
+                    of{" "}
+                    <span className="tabular-nums text-[#c8d4e0]">{filteredQueue.length}</span>
+                    {queueFilter === "critical" ? " critical" : ""}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={queuePage <= 1}
+                      onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--color-aegis-border)] bg-[#0d1117] px-2.5 py-1.5 text-[#e6edf3] transition-colors hover:border-[#34d399]/35 disabled:opacity-35"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+                      Prev
+                    </button>
+                    <span className="tabular-nums text-[#9aa7b8]">
+                      Page {queuePage} / {queueTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={queuePage >= queueTotalPages}
+                      onClick={() => setQueuePage((p) => Math.min(queueTotalPages, p + 1))}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--color-aegis-border)] bg-[#0d1117] px-2.5 py-1.5 text-[#e6edf3] transition-colors hover:border-[#34d399]/35 disabled:opacity-35"
+                    >
+                      Next
+                      <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="rounded-xl border border-[var(--color-aegis-border)] bg-[#0d1117] px-6 py-12 text-center">
               <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-[var(--color-aegis-muted)]" />
@@ -420,7 +478,7 @@ export default function DashboardPage() {
       </div>
 
       {perfMetrics.length > 0 && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="min-w-0 max-w-full">
           <ModelPerformanceChart metrics={perfMetrics} />
         </div>
       )}

@@ -273,6 +273,21 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
 
         # ---- 5. Persist run_scores -------------------------------------------
         score_records = _build_score_records(results)
+        _fired_slots = sum(len(r.get("heuristic_triggered") or []) for r in score_records)
+        _distinct_h = set()
+        for r in score_records:
+            for hid in r.get("heuristic_triggered") or []:
+                try:
+                    _distinct_h.add(int(hid))
+                except (TypeError, ValueError):
+                    continue
+        logger.info(
+            "run_heuristic_persist | run=%s tx_rows=%d fired_heuristic_slots=%d distinct_heuristic_ids=%d",
+            run_id,
+            len(score_records),
+            _fired_slots,
+            len(_distinct_h),
+        )
         await loop.run_in_executor(None, runs_repo.insert_run_scores, run_id, score_records)
         _step(run_id, 75, "Persisted lens scores and meta-learner output")
 
@@ -347,10 +362,24 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
                 typology,
             )
 
+            # AML cluster risk: mean meta_score over scored txs in cluster (same scale as transactions).
+            metas: list[float] = []
+            for row in cluster_scores:
+                m = row.get("meta_score")
+                if m is None:
+                    continue
+                try:
+                    mf = float(m)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(mf):
+                    metas.append(mf)
+            aml_risk = float(np.mean(metas)) if metas else float(cg.get("risk_score", 0) or 0)
+
             cluster_data = {
                 "label": f"Cluster ({len(cg['wallets'])} wallets)",
                 "typology": typology,
-                "risk_score": cg.get("risk_score", 0),
+                "risk_score": aml_risk,
                 "total_amount": float(total_amount),
                 "wallet_count": len(cg["wallets"]),
                 "tx_count": sub.number_of_edges(),
@@ -372,7 +401,7 @@ async def execute_pipeline_run(run_id: str, frames: list[pd.DataFrame]) -> None:
             wallets = cr["_wallets"]
             sub = graph.subgraph(wallets).copy()
             cyto = graph_to_cytoscape(sub)
-            _annotate_cytoscape(cyto, results, suspicious)
+            _annotate_cytoscape(cyto, results, suspicious, transactions_dicts)
             await loop.run_in_executor(
                 None, runs_repo.insert_graph_snapshot, run_id, cid, cyto.get("elements", []),
             )
@@ -452,23 +481,38 @@ def _df_to_tx_records(df: pd.DataFrame) -> list[dict]:
 
 
 def _triggered_ids_for_storage(r: dict) -> list[int]:
-    """Normalize heuristic IDs for JSONB (native list, not a pre-serialized string)."""
-    raw = r.get("triggered_ids") or []
-    out: list[int] = []
-    for x in raw:
+    """Normalize heuristic IDs for JSONB (native list, not a pre-serialized string).
+
+    Union ``triggered_ids`` with any index in ``heuristic_vector`` whose confidence is
+    non-zero so fired heuristics are never dropped when persisting.
+    """
+    out: set[int] = set()
+    for x in r.get("triggered_ids") or []:
         try:
-            out.append(int(x))
+            out.add(int(x))
         except (TypeError, ValueError):
             continue
-    return out
+
+    hv = r.get("heuristic_vector")
+    if hv is not None:
+        try:
+            arr = np.asarray(hv, dtype=np.float64).ravel()
+            for i in range(min(int(arr.size), 185)):
+                if float(arr[i]) > 1e-9:
+                    out.add(i + 1)
+        except (TypeError, ValueError):
+            pass
+    return sorted(out)
 
 
 def _build_score_records(results: list[dict]) -> list[dict]:
     out = []
     for r in results:
         trig = _triggered_ids_for_storage(r)
-        _hc = r.get("heuristic_triggered_count")
-        h_count = int(_hc) if _hc is not None else len(trig)
+        h_count = len(trig)
+        hexpl = r.get("heuristic_explanations")
+        if not isinstance(hexpl, dict):
+            hexpl = {}
         out.append({
             "transaction_id": r.get("transaction_id", ""),
             "behavioral_score": r.get("behavioral_score"),
@@ -483,6 +527,7 @@ def _build_score_records(results: list[dict]) -> list[dict]:
             "explanation_summary": r.get("explanation_summary"),
             "heuristic_triggered": trig,
             "heuristic_triggered_count": h_count,
+            "heuristic_explanations": hexpl,
             "heuristic_top_typo": r.get("heuristic_top_typology"),
             "heuristic_top_conf": r.get("heuristic_top_confidence"),
         })
@@ -548,19 +593,75 @@ def _build_suspicious_records(
     return out
 
 
-def _annotate_cytoscape(cyto: dict, results: list[dict], suspicious: list[dict]) -> None:
-    """Add risk metadata to Cytoscape elements for frontend styling."""
-    sus_ids = {s["transaction_id"] for s in suspicious}
-    score_map = {r["transaction_id"]: r for r in results}
+def _wallet_best_scores(
+    results: list[dict],
+    transactions_dicts: list[dict],
+) -> dict[str, tuple[float, str | None]]:
+    """Map wallet address → (max meta_score, risk_level from that row) for graph node labels."""
+    tx_by_id = {str(t.get("transaction_id")): t for t in transactions_dicts}
+    best: dict[str, tuple[float, str | None]] = {}
+    for r in results:
+        tid = str(r.get("transaction_id", ""))
+        meta = r.get("meta_score")
+        if meta is None:
+            continue
+        try:
+            m = float(meta)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(m):
+            continue
+        tx = tx_by_id.get(tid)
+        if not tx:
+            continue
+        rl = r.get("risk_level")
+        rl_str = str(rl) if rl is not None else None
+        for w in (str(tx.get("sender_wallet", "")), str(tx.get("receiver_wallet", ""))):
+            if not w:
+                continue
+            prev = best.get(w)
+            if prev is None or m > prev[0]:
+                best[w] = (m, rl_str)
+    return best
+
+
+def _wallets_in_suspicious_txs(
+    suspicious: list[dict],
+    transactions_dicts: list[dict],
+) -> set[str]:
+    """Wallet addresses that touch at least one suspicious transaction."""
+    tx_by_id = {str(t.get("transaction_id")): t for t in transactions_dicts}
+    out: set[str] = set()
+    for s in suspicious:
+        tid = str(s.get("transaction_id", ""))
+        tx = tx_by_id.get(tid)
+        if not tx:
+            continue
+        for w in (str(tx.get("sender_wallet", "")), str(tx.get("receiver_wallet", ""))):
+            if w:
+                out.add(w)
+    return out
+
+
+def _annotate_cytoscape(
+    cyto: dict,
+    results: list[dict],
+    suspicious: list[dict],
+    transactions_dicts: list[dict],
+) -> None:
+    """Add risk metadata to Cytoscape elements (node ids are wallet addresses)."""
+    touch_sus = _wallets_in_suspicious_txs(suspicious, transactions_dicts)
+    wallet_scores = _wallet_best_scores(results, transactions_dicts)
     for el in cyto.get("elements", []):
         data = el.get("data", {})
-        nid = data.get("id", "")
-        if nid in sus_ids:
+        nid = str(data.get("id", ""))
+        if nid in touch_sus:
             data["suspicious"] = True
-        sc = score_map.get(nid)
-        if sc:
-            data["meta_score"] = sc.get("meta_score")
-            data["risk_level"] = sc.get("risk_level")
+        ws = wallet_scores.get(nid)
+        if ws:
+            data["meta_score"] = ws[0]
+            if ws[1]:
+                data["risk_level"] = ws[1]
 
 
 def _build_report(
