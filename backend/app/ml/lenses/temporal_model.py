@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pathlib import Path
+
+from app.ml.ml_device import resolve_torch_device
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +33,7 @@ class TemporalLens:
     def __init__(self):
         self.model = None
         self.input_dim = None
+        self._device = None
 
     def build_sequences(self, transactions_df, wallet: str, heuristic_scores: np.ndarray = None) -> np.ndarray:
         """Build padded sequence for a wallet."""
@@ -62,9 +65,10 @@ class TemporalLens:
         for wallet in wallets:
             seq = self.build_sequences(transactions_df, wallet, heuristic_scores)
             if self.model is not None:
+                device = self._device or resolve_torch_device()
                 self.model.eval()
                 with torch.no_grad():
-                    tensor = torch.FloatTensor(seq)
+                    tensor = torch.FloatTensor(seq).to(device)
                     logit = self.model(tensor).item()
                     score = 1.0 / (1.0 + np.exp(-logit))  # Apply sigmoid to convert logit to probability
             else:
@@ -75,9 +79,11 @@ class TemporalLens:
     def load(self, model_path: str):
         p = Path(model_path)
         if p.exists():
-            state = torch.load(p, map_location="cpu", weights_only=True)
+            self._device = resolve_torch_device()
+            state = torch.load(p, map_location=self._device, weights_only=True)
             input_dim = state.get("input_dim", 4)
             self.input_dim = input_dim
             self.model = TemporalLSTM(input_dim)
             self.model.load_state_dict(state["model_state_dict"])
-            logger.info(f"Loaded temporal LSTM from {p}")
+            self.model.to(self._device)
+            logger.info(f"Loaded temporal LSTM from {p} (device={self._device})")

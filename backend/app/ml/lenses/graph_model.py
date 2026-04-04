@@ -5,7 +5,10 @@ import torch.nn.functional as F
 from torch_geometric.nn import GATConv
 from torch_geometric.data import Data
 from pathlib import Path
+
 import networkx as nx
+
+from app.ml.ml_device import resolve_torch_device
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,6 +37,7 @@ class GraphLens:
     def __init__(self):
         self.model = None
         self.node_mapping = {}
+        self._device = None
 
     def nx_to_pyg(self, G: nx.DiGraph, node_features: dict, heuristic_scores: dict = None) -> Data:
         """Convert NetworkX graph to PyTorch Geometric Data object."""
@@ -65,6 +69,8 @@ class GraphLens:
         data = self.nx_to_pyg(G, node_features, heuristic_scores)
         if self.model is None:
             return {"graph_score": np.zeros(data.x.shape[0]), "embeddings": data.x.numpy()}
+        device = self._device or resolve_torch_device()
+        data = data.to(device)
         self.model.eval()
         with torch.no_grad():
             logits = self.model(data.x, data.edge_index)
@@ -72,16 +78,18 @@ class GraphLens:
             embeddings = self.model.get_embeddings(data.x, data.edge_index)
         inv_map = {v: k for k, v in self.node_mapping.items()}
         return {
-            "graph_score": probs[:, 1].numpy(),
-            "embeddings": embeddings.numpy(),
+            "graph_score": probs[:, 1].cpu().numpy(),
+            "embeddings": embeddings.cpu().numpy(),
             "node_mapping": inv_map,
         }
 
     def load(self, model_path: str):
         p = Path(model_path)
         if p.exists():
-            state = torch.load(p, map_location="cpu", weights_only=True)
+            self._device = resolve_torch_device()
+            state = torch.load(p, map_location=self._device, weights_only=True)
             in_channels = state.get("in_channels", 7)
             self.model = GATClassifier(in_channels)
             self.model.load_state_dict(state["model_state_dict"])
-            logger.info(f"Loaded GAT model from {p}")
+            self.model.to(self._device)
+            logger.info(f"Loaded GAT model from {p} (device={self._device})")

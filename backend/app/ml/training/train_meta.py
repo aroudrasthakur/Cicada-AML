@@ -19,6 +19,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
+from app.ml.ml_device import fit_xgboost_classifier, log_device_banner, xgboost_fit_kwargs
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -100,7 +101,8 @@ def main() -> None:
     data_dir = Path(args.data_dir)
 
     logger.info("=== Training Meta-Learner ===")
-    
+    log_device_banner(logger, "train_meta")
+
     # Validate that all lens models exist before training meta-model
     required_models = [
         "models/behavioral/xgboost_behavioral.pkl",
@@ -143,8 +145,9 @@ def main() -> None:
         use_label_encoder=False,
         subsample=0.8,
         colsample_bytree=0.8,
+        **xgboost_fit_kwargs(),
     )
-    base_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    base_model = fit_xgboost_classifier(base_model, X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 
     logger.info("Applying Platt calibration (sigmoid)...")
     calibrated = CalibratedClassifierCV(base_model, cv="prefit", method="sigmoid")

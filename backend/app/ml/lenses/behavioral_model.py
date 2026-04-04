@@ -5,6 +5,8 @@ import joblib
 import torch
 import torch.nn as nn
 from pathlib import Path
+
+from app.ml.ml_device import resolve_torch_device
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -37,6 +39,7 @@ class BehavioralLens:
         self.autoencoder = None
         self.scaler = None
         self.feature_names = None
+        self._device = None
 
     def _select_features(self, features_df: pd.DataFrame, heuristic_scores: np.ndarray) -> np.ndarray:
         """Combine behavioral features with heuristic scores tagged for this lens."""
@@ -67,11 +70,12 @@ class BehavioralLens:
         if self.xgb_model is not None:
             behavioral_score = self.xgb_model.predict_proba(X)[:, 1] if hasattr(self.xgb_model, 'predict_proba') else self.xgb_model.predict(X)
         if self.autoencoder is not None:
+            device = self._device or resolve_torch_device()
             self.autoencoder.eval()
             with torch.no_grad():
-                tensor = torch.FloatTensor(X)
+                tensor = torch.FloatTensor(X).to(device)
                 recon = self.autoencoder(tensor)
-                anomaly_score = ((tensor - recon) ** 2).mean(dim=1).numpy()
+                anomaly_score = ((tensor - recon) ** 2).mean(dim=1).cpu().numpy()
         return {"behavioral_score": behavioral_score, "behavioral_anomaly_score": anomaly_score}
 
     def load(self, xgb_path: str, ae_path: str):
@@ -87,8 +91,10 @@ class BehavioralLens:
             logger.info(f"Loaded behavioral scaler from {scaler_path}")
         
         if ae_p.exists():
-            state = torch.load(ae_p, map_location="cpu", weights_only=True)
+            self._device = resolve_torch_device()
+            state = torch.load(ae_p, map_location=self._device, weights_only=True)
             input_dim = state.get("input_dim", 32)
             self.autoencoder = BehavioralAutoencoder(input_dim)
             self.autoencoder.load_state_dict(state["model_state_dict"])
-            logger.info(f"Loaded behavioral autoencoder from {ae_p}")
+            self.autoencoder.to(self._device)
+            logger.info(f"Loaded behavioral autoencoder from {ae_p} (device={self._device})")

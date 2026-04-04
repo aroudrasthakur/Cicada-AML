@@ -16,6 +16,12 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 from app.ml.lenses.behavioral_model import BehavioralAutoencoder
+from app.ml.ml_device import (
+    fit_xgboost_classifier,
+    log_device_banner,
+    resolve_torch_device,
+    xgboost_fit_kwargs,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -79,8 +85,9 @@ def _train_xgboost(X_train, y_train, X_val, y_val) -> XGBClassifier:
         early_stopping_rounds=20,
         random_state=42,
         use_label_encoder=False,
+        **xgboost_fit_kwargs(),
     )
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    model = fit_xgboost_classifier(model, X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 
     y_prob = model.predict_proba(X_val)[:, 1]
     pr_auc = average_precision_score(y_val, y_prob)
@@ -89,15 +96,15 @@ def _train_xgboost(X_train, y_train, X_val, y_val) -> XGBClassifier:
     return model
 
 
-def _train_autoencoder(X_licit: np.ndarray, input_dim: int) -> BehavioralAutoencoder:
-    ae = BehavioralAutoencoder(input_dim, latent_dim=AE_LATENT)
+def _train_autoencoder(X_licit: np.ndarray, input_dim: int, device: torch.device) -> BehavioralAutoencoder:
+    ae = BehavioralAutoencoder(input_dim, latent_dim=AE_LATENT).to(device)
     optimizer = torch.optim.Adam(ae.parameters(), lr=AE_LR)
     criterion = nn.MSELoss()
-    dataset = torch.FloatTensor(X_licit)
+    dataset = torch.FloatTensor(X_licit).to(device)
 
     ae.train()
     for epoch in range(1, AE_EPOCHS + 1):
-        perm = torch.randperm(len(dataset))
+        perm = torch.randperm(len(dataset), device=device)
         epoch_loss = 0.0
         n_batches = 0
         for start in range(0, len(dataset), AE_BATCH):
@@ -123,6 +130,8 @@ def main() -> None:
     data_dir = Path(args.data_dir)
 
     logger.info("=== Training Behavioral Lens ===")
+    log_device_banner(logger, "train_behavioral")
+    device = resolve_torch_device()
     train_df, val_df = _load_data(data_dir)
 
     X_train, feature_names = _select_features(train_df)
@@ -139,7 +148,7 @@ def main() -> None:
     licit_mask = y_train == 0
     X_licit = X_train_s[licit_mask]
     logger.info("Training autoencoder on %d licit samples (input_dim=%d)", len(X_licit), X_licit.shape[1])
-    ae = _train_autoencoder(X_licit, X_licit.shape[1])
+    ae = _train_autoencoder(X_licit, X_licit.shape[1], device)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     joblib.dump(xgb_model, OUTPUT_DIR / "xgboost_behavioral.pkl")

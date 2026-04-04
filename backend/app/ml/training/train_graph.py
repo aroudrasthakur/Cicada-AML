@@ -15,6 +15,7 @@ from sklearn.metrics import average_precision_score, classification_report
 from torch_geometric.data import Data
 
 from app.ml.lenses.graph_model import GATClassifier
+from app.ml.ml_device import log_device_banner, resolve_torch_device
 from app.services.graph_service import build_wallet_graph, compute_node_features
 from app.utils.logger import get_logger
 
@@ -95,14 +96,15 @@ def _build_pyg_data(
     return data, node_map
 
 
-def _train_gat(data: Data) -> GATClassifier:
+def _train_gat(data: Data, device: torch.device) -> GATClassifier:
+    data = data.to(device)
     in_channels = data.x.shape[1]
-    model = GATClassifier(in_channels=in_channels, hidden_channels=64, heads=8, num_classes=2)
+    model = GATClassifier(in_channels=in_channels, hidden_channels=64, heads=8, num_classes=2).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=5e-4)
 
     n_pos = int(data.y[data.train_mask].sum())
     n_neg = int(data.train_mask.sum()) - n_pos
-    weight = torch.FloatTensor([1.0, max(n_neg / max(n_pos, 1), 1.0)])
+    weight = torch.FloatTensor([1.0, max(n_neg / max(n_pos, 1), 1.0)]).to(device)
     logger.info("GAT class weights: %s", weight.tolist())
 
     best_ap, best_state, wait = 0.0, None, 0
@@ -121,15 +123,15 @@ def _train_gat(data: Data) -> GATClassifier:
                 val_probs = F.softmax(val_logits, dim=1)[:, 1]
                 if data.val_mask.any():
                     val_ap = average_precision_score(
-                        data.y[data.val_mask].numpy(),
-                        val_probs[data.val_mask].numpy(),
+                        data.y[data.val_mask].detach().cpu().numpy(),
+                        val_probs[data.val_mask].detach().cpu().numpy(),
                     )
                 else:
                     val_ap = 0.0
             logger.info("Epoch %d/%d  loss=%.4f  val_PR-AUC=%.4f", epoch, EPOCHS, loss.item(), val_ap)
             if val_ap > best_ap:
                 best_ap = val_ap
-                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 wait = 0
             else:
                 wait += 10
@@ -147,8 +149,8 @@ def _train_gat(data: Data) -> GATClassifier:
         val_logits = model(data.x, data.edge_index)
         val_probs = F.softmax(val_logits, dim=1)[:, 1]
         if data.val_mask.any():
-            y_val = data.y[data.val_mask].numpy()
-            p_val = val_probs[data.val_mask].numpy()
+            y_val = data.y[data.val_mask].detach().cpu().numpy()
+            p_val = val_probs[data.val_mask].detach().cpu().numpy()
             logger.info("\n%s", classification_report(y_val, (p_val >= 0.5).astype(int), zero_division=0))
     return model
 
@@ -160,6 +162,8 @@ def main() -> None:
     data_dir = Path(args.data_dir)
 
     logger.info("=== Training Graph Lens ===")
+    log_device_banner(logger, "train_graph")
+    device = resolve_torch_device()
     labels_df, G = _load_data(data_dir)
     logger.info("Graph: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
 
@@ -167,11 +171,11 @@ def main() -> None:
     data, node_map = _build_pyg_data(G, node_features, labels_df)
     logger.info("PyG data: %d nodes, %d edges, %d features", data.x.shape[0], data.edge_index.shape[1], data.x.shape[1])
 
-    model = _train_gat(data)
+    model = _train_gat(data, device)
 
     model.eval()
     with torch.no_grad():
-        embeddings = model.get_embeddings(data.x, data.edge_index).numpy()
+        embeddings = model.get_embeddings(data.x, data.edge_index).detach().cpu().numpy()
     inv_map = {v: k for k, v in node_map.items()}
     logger.info("Extracted node embeddings: shape %s", embeddings.shape)
 

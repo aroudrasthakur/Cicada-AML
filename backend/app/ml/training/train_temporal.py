@@ -12,6 +12,7 @@ import torch.nn as nn
 from sklearn.metrics import average_precision_score, classification_report
 
 from app.ml.lenses.temporal_model import TemporalLSTM, MAX_SEQ_LEN
+from app.ml.ml_device import log_device_banner, resolve_torch_device
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -118,24 +119,24 @@ def _oversample_illicit(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.nd
     return X_over[perm], y_over[perm]
 
 
-def _train_lstm(X_train, y_train, X_val, y_val, input_dim: int) -> TemporalLSTM:
-    model = TemporalLSTM(input_dim=input_dim, hidden_dim=128, num_layers=2, dropout=0.2)
+def _train_lstm(X_train, y_train, X_val, y_val, input_dim: int, device: torch.device) -> TemporalLSTM:
+    model = TemporalLSTM(input_dim=input_dim, hidden_dim=128, num_layers=2, dropout=0.2).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
-    pos_weight = torch.FloatTensor([max(n_neg / max(n_pos, 1), 1.0)])
+    pos_weight = torch.FloatTensor([max(n_neg / max(n_pos, 1), 1.0)]).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-    X_t = torch.FloatTensor(X_train)
-    y_t = torch.FloatTensor(y_train)
-    X_v = torch.FloatTensor(X_val)
+    X_t = torch.FloatTensor(X_train).to(device)
+    y_t = torch.FloatTensor(y_train).to(device)
+    X_v = torch.FloatTensor(X_val).to(device)
     y_v_np = y_val
 
     best_ap, best_state, wait = 0.0, None, 0
     for epoch in range(1, EPOCHS + 1):
         model.train()
-        perm = torch.randperm(len(X_t))
+        perm = torch.randperm(len(X_t), device=device)
         epoch_loss = 0.0
         n_batches = 0
         for start in range(0, len(X_t), BATCH_SIZE):
@@ -151,13 +152,13 @@ def _train_lstm(X_train, y_train, X_val, y_val, input_dim: int) -> TemporalLSTM:
         if epoch % 5 == 0 or epoch == 1:
             model.eval()
             with torch.no_grad():
-                val_pred = model(X_v).numpy()
+                val_pred = model(X_v).detach().cpu().numpy()
             val_prob = 1.0 / (1.0 + np.exp(-val_pred))
             val_ap = average_precision_score(y_v_np, val_prob) if y_v_np.sum() > 0 else 0.0
             logger.info("Epoch %d/%d  loss=%.4f  val_PR-AUC=%.4f", epoch, EPOCHS, epoch_loss / max(n_batches, 1), val_ap)
             if val_ap > best_ap:
                 best_ap = val_ap
-                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 wait = 0
             else:
                 wait += 5
@@ -171,7 +172,7 @@ def _train_lstm(X_train, y_train, X_val, y_val, input_dim: int) -> TemporalLSTM:
 
     model.eval()
     with torch.no_grad():
-        val_pred = model(X_v).numpy()
+        val_pred = model(X_v).detach().cpu().numpy()
     val_prob = 1.0 / (1.0 + np.exp(-val_pred))
     logger.info("\n%s", classification_report(y_v_np, (val_prob >= 0.5).astype(int), zero_division=0))
     return model
@@ -184,6 +185,8 @@ def main() -> None:
     data_dir = Path(args.data_dir)
 
     logger.info("=== Training Temporal Lens ===")
+    log_device_banner(logger, "train_temporal")
+    device = resolve_torch_device()
     txn_df, wallet_labels = _load_data(data_dir)
     X, y = _build_wallet_sequences(txn_df, wallet_labels)
     logger.info("Built %d wallet sequences (illicit=%d)", len(y), int(y.sum()))
@@ -198,7 +201,7 @@ def main() -> None:
     input_dim = X_train.shape[2]
     logger.info("Input dim=%d, train=%d, val=%d", input_dim, len(y_train), len(y_val))
 
-    model = _train_lstm(X_train, y_train, X_val, y_val, input_dim)
+    model = _train_lstm(X_train, y_train, X_val, y_val, input_dim, device)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(

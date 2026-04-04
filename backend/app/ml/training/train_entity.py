@@ -15,6 +15,7 @@ from sklearn.metrics import average_precision_score, classification_report
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
+from app.ml.ml_device import fit_xgboost_classifier, log_device_banner, xgboost_fit_kwargs
 from app.services.graph_service import build_wallet_graph
 from app.utils.logger import get_logger
 
@@ -148,6 +149,7 @@ def main() -> None:
     data_dir = Path(args.data_dir)
 
     logger.info("=== Training Entity Lens ===")
+    log_device_banner(logger, "train_entity")
     G, labels_df = _load_data(data_dir)
     embeddings, node_map = _load_embeddings()
     partition = _run_louvain(G)
@@ -173,8 +175,9 @@ def main() -> None:
         early_stopping_rounds=15,
         random_state=42,
         use_label_encoder=False,
+        **xgboost_fit_kwargs(),
     )
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    model = fit_xgboost_classifier(model, X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 
     y_prob = model.predict_proba(X_val)[:, 1]
     pr_auc = average_precision_score(y_val, y_prob)

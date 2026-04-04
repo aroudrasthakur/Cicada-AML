@@ -1,5 +1,6 @@
-from pydantic_settings import BaseSettings
 from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -25,11 +26,14 @@ class Settings(BaseSettings):
     fallback_risk_threshold: float = 0.75
     network_hops: int = 3
 
+    # When true, use CUDA (XGBoost + PyTorch) or MPS (PyTorch only) when available; else CPU
+    ml_use_gpu: bool = False
+
     @property
     def model_dir_path(self) -> Path:
         return Path(self.model_dir)
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()
