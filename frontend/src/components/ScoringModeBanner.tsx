@@ -1,4 +1,4 @@
-import { useScoringMode } from "@/contexts/ScoringModeContext";
+import { useScoringMode } from "@/contexts/useScoringMode";
 
 type Variant = "card" | "strip";
 

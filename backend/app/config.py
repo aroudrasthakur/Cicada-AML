@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_service_role_key: str = ""
-    # JWT secret from Supabase Dashboard → Project Settings → API → JWT Secret (validate user access tokens)
+    # Legacy HS256 user access tokens only (optional if you use JWT signing keys + JWKS)
     supabase_jwt_secret: str = ""
     supabase_jwt_audience: str = "authenticated"
 

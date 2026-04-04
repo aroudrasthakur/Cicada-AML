@@ -8,7 +8,7 @@ import {
   Shield,
   Loader2,
 } from "lucide-react";
-import { useRunContext } from "@/contexts/RunContext";
+import { useRunContext } from "@/contexts/useRunContext";
 import { fetchRunReport } from "@/api/runs";
 import type { PipelineRun, RunReport, RunReportContent } from "@/types/run";
 

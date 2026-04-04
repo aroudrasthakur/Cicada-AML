@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -9,28 +7,7 @@ import {
 } from "react";
 import type { PipelineRun } from "@/types/run";
 import { fetchRun, fetchRuns } from "@/api/runs";
-
-interface RunContextValue {
-  /** Currently active / selected run */
-  activeRun: PipelineRun | null;
-  /** All historical runs (newest first) */
-  runs: PipelineRun[];
-  /** Select a different run by id */
-  selectRun: (runId: string) => void;
-  /** Refresh the run list from backend */
-  refreshRuns: () => Promise<void>;
-  /** Track a newly-created run and start polling */
-  trackRun: (runId: string) => void;
-  loading: boolean;
-}
-
-const RunCtx = createContext<RunContextValue | null>(null);
-
-export function useRunContext(): RunContextValue {
-  const ctx = useContext(RunCtx);
-  if (!ctx) throw new Error("useRunContext must be inside <RunProvider>");
-  return ctx;
-}
+import { RunCtx } from "@/contexts/runContext";
 
 export function RunProvider({ children }: { children: ReactNode }) {
   const [runs, setRuns] = useState<PipelineRun[]>([]);

@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
@@ -9,25 +7,14 @@ import {
 } from "react";
 import type { ScoringMetrics, ScoringMode } from "@/types/dashboard";
 import { fetchModelMetrics, fetchModelThreshold } from "@/api/runs";
-
-interface ScoringModeContextValue {
-  mode: ScoringMode;
-  setMode: (m: ScoringMode) => void;
-  metrics: ScoringMetrics;
-  setMetrics: (m: ScoringMetrics) => void;
-}
-
-const fallbackMetrics: ScoringMetrics = {
-  precisionAt50: 0,
-  recallAt50: 0,
-  prAuc: 0,
-};
-
-const ScoringModeContext = createContext<ScoringModeContextValue | null>(null);
+import {
+  fallbackScoringMetrics,
+  ScoringModeCtx,
+} from "@/contexts/scoringModeContext";
 
 export function ScoringModeProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ScoringMode>("FULL_SCORING");
-  const [metrics, setMetricsState] = useState<ScoringMetrics>(fallbackMetrics);
+  const [metrics, setMetricsState] = useState<ScoringMetrics>(fallbackScoringMetrics);
 
   useEffect(() => {
     (async () => {
@@ -56,16 +43,6 @@ export function ScoringModeProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <ScoringModeContext.Provider value={value}>
-      {children}
-    </ScoringModeContext.Provider>
+    <ScoringModeCtx.Provider value={value}>{children}</ScoringModeCtx.Provider>
   );
-}
-
-export function useScoringMode() {
-  const ctx = useContext(ScoringModeContext);
-  if (!ctx) {
-    throw new Error("useScoringMode must be used within ScoringModeProvider");
-  }
-  return ctx;
 }

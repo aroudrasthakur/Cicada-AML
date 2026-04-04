@@ -5,7 +5,7 @@ import TransactionTable from "@/components/TransactionTable";
 import LensRadarChart from "@/components/LensRadarChart";
 import TypologyHeatmap from "@/components/TypologyHeatmap";
 import ModelPerformanceChart from "@/components/ModelPerformanceChart";
-import { useRunContext } from "@/contexts/RunContext";
+import { useRunContext } from "@/contexts/useRunContext";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   fetchDashboardStats,

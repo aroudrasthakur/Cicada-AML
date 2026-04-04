@@ -7,7 +7,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import NetworkGraph from "@/components/NetworkGraph";
-import { useRunContext } from "@/contexts/RunContext";
+import { useRunContext } from "@/contexts/useRunContext";
 import {
   fetchRunClusters,
   fetchClusterGraph,

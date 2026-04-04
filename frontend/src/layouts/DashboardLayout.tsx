@@ -15,8 +15,10 @@ import {
   Hexagon,
   LogOut,
 } from "lucide-react";
-import { ScoringModeProvider, useScoringMode } from "@/contexts/ScoringModeContext";
-import { RunProvider, useRunContext } from "@/contexts/RunContext";
+import { ScoringModeProvider } from "@/contexts/ScoringModeProvider";
+import { useScoringMode } from "@/contexts/useScoringMode";
+import { RunProvider } from "@/contexts/RunProvider";
+import { useRunContext } from "@/contexts/useRunContext";
 import { useAuth } from "@/contexts/AuthContext";
 import ScoringModeBanner from "@/components/ScoringModeBanner";
 import UploadModal from "@/components/UploadModal";

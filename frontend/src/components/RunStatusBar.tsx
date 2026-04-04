@@ -1,5 +1,5 @@
 import { Loader2, CheckCircle2, XCircle, Clock } from "lucide-react";
-import { useRunContext } from "@/contexts/RunContext";
+import { useRunContext } from "@/contexts/useRunContext";
 
 export default function RunStatusBar() {
   const { activeRun } = useRunContext();
