@@ -23,6 +23,9 @@ todos:
   - id: lens-models
     content: "Phase 7: 6 Lens models - Behavioral (XGBoost+Autoencoder), Graph (GAT), Entity (Louvain/Leiden+clustering), Temporal (LSTM), Document (XGBoost+NLP), Off-ramp (XGBoost+classifier). Each consumes heuristic outputs + lens-specific features."
     status: pending
+  - id: training
+    content: "Phase 7b: Model training - class imbalance handling, per-lens training procedures, hyperparameter tuning, time-aware cross-validation, training orchestration in dependency order"
+    status: pending
   - id: meta-model
     content: "Phase 8: Meta-model - XGBoost meta-learner combining 6 lens scores + anomaly signals + heuristic aggregates + data-availability flags with calibration and policy thresholds"
     status: pending
@@ -114,6 +117,7 @@ flowchart LR
     Heuristics --> OfframpLens["Off-ramp Lens"]
     BehavioralLens --> Meta["XGBoost Meta-Learner"]
     GraphLens --> Meta
+    GraphLens -.-> EntityLens
     EntityLens --> Meta
     TemporalLens --> Meta
     DocumentLens --> Meta
@@ -143,7 +147,7 @@ Critical guardrail: if required data for a heuristic is missing, the heuristic m
 ### Backend (`backend/`)
 
 - Initialize FastAPI app with the full folder structure from the spec
-- `backend/requirements.txt` with pinned deps: `fastapi`, `uvicorn`, `supabase`, `pandas`, `numpy`, `scikit-learn`, `xgboost`, `lightgbm`, `torch`, `torch-geometric`, `networkx`, `python-louvain`, `shap`, `pydantic`, `python-multipart`, `python-dotenv`, `joblib`, `leidenalg`, `igraph`
+- `backend/requirements.txt` with pinned deps: `fastapi`, `uvicorn`, `supabase`, `pandas`, `numpy`, `scikit-learn`, `xgboost`, `lightgbm`, `torch`, `torch-geometric`, `networkx`, `python-louvain`, `shap`, `pydantic`, `python-multipart`, `python-dotenv`, `joblib`, `leidenalg`, `igraph`, `optuna`
 - `backend/app/main.py` - FastAPI app with CORS, router registration
 - `backend/app/config.py` - Pydantic Settings loading from `.env`
 - `backend/app/supabase_client.py` - Supabase client singleton
@@ -248,6 +252,18 @@ Create SQL migration files in `supabase/migrations/`:
 - Download/load `elliptic_txs_features.csv`, `elliptic_txs_edgelist.csv`, `elliptic_txs_classes.csv`
 - Map Elliptic columns to our schema (166 features -> our feature set, classes -> labels)
 - Store in Supabase and local `data/` folder
+
+### Elliptic dataset realities (must be accounted for)
+
+The Elliptic Bitcoin Dataset is the primary training and evaluation dataset. Its properties directly constrain what the MVP can demonstrate:
+
+- **Scale**: ~203,769 transactions across 49 time steps with ~234,355 directed edges.
+- **Anonymized features**: All 166 features are opaque. 94 are transaction-local features (derived from transaction metadata) and 72 are 1-hop neighborhood aggregates computed by the dataset authors. There are no real wallet addresses, amounts, or timestamps — only integer node IDs and float feature vectors.
+- **Label distribution**: class 1 = illicit (~4,545 nodes, ~2.2%), class 2 = licit (~42,019, ~20.6%), unknown (~157,205, ~77.2%). This extreme imbalance and large unknown fraction must be handled explicitly (see Phase 7b: Model Training Strategy).
+- **Unknown labels are NOT "clean"**: During training, exclude unknowns from supervised loss. During inference, score them normally. Never treat unknown as a negative label.
+- **Heuristic coverage on Elliptic**: Because features are anonymized, heuristics that require real-world signals (round-amount detection, time-delay analysis, exchange-proximity scoring, document metadata) cannot compute on raw Elliptic data. These heuristics should return `applicability=inapplicable_missing_data` for Elliptic records, which is correct behavior and validates the applicability system. Approximately 40-60% of the 185 heuristics will fire as inapplicable on Elliptic — this is expected and is surfaced transparently in the applicability summary.
+- **Lens coverage on Elliptic**: The Graph Lens and Behavioral Lens carry the most weight on Elliptic because the anonymized feature vectors still encode structural and behavioral signals. The Temporal Lens can partially operate using the 49 time-step ordering. The Document and Off-ramp Lenses will operate in limited/reduced mode on Elliptic. This is an inherent limitation of the dataset, not of the architecture.
+- **Custom CSV uploads**: Real transaction data with actual amounts, timestamps, and addresses will activate the full heuristic and lens coverage, demonstrating the system's full capability.
 
 ### Data contract and coverage tiers (required)
 
@@ -413,6 +429,15 @@ Each lens also receives `data_availability_flags` so missing off-chain data does
 
 Each of the 185 heuristics is tagged with one or more lenses it's relevant to. The lens model receives the subset of heuristic scores tagged for it, plus the full feature vector.
 
+### Lens Execution Ordering
+
+The 6 lenses are NOT fully independent. The Entity Lens consumes graph embeddings produced by the Graph Lens. Therefore the execution order during both training and inference is:
+
+1. **Parallel group 1**: Behavioral, Graph, Temporal, Document, Off-ramp (these are independent of each other)
+2. **Sequential after group 1**: Entity (requires graph embeddings from Graph Lens)
+
+This dependency is intentional: entity resolution benefits from the learned structural representations. During training, the Graph Lens must be trained first so its embeddings can be used as Entity Lens input features.
+
 ### 1. Behavioral Lens Model
 
 **Goal**: Detect economically unnecessary activity - too many hops, too many entities, sudden changes, circular flows, transfers without business purpose.
@@ -427,7 +452,8 @@ Each of the 185 heuristics is tagged with one or more lenses it's relevant to. T
 **Outputs**: behavioral_score (float), behavioral_anomaly_score (float from autoencoder)
 
 **Files**:
-- `backend/app/ml/lenses/behavioral_model.py` - Train + inference
+- `backend/app/ml/lenses/behavioral_model.py` - Model definition + inference
+- `backend/app/ml/training/train_behavioral.py` - Training script
 - `models/behavioral/xgboost_behavioral.pkl`, `models/behavioral/autoencoder_behavioral.pt`
 
 ### 2. Graph Lens Model
@@ -441,13 +467,14 @@ Each of the 185 heuristics is tagged with one or more lenses it's relevant to. T
 - Graph features: in/out degree, weighted volume, fan-in/fan-out ratio, centrality scores, 1-hop/2-hop suspicious neighbor ratio, clustering coefficient, relay pattern score
 - Node features from graph construction
 
-**Outputs**: graph_score (float), node embeddings (for clustering)
+**Outputs**: graph_score (float), node embeddings (for clustering and Entity Lens consumption)
 
 **Files**:
-- `backend/app/ml/lenses/graph_model.py` - GAT definition, train, inference
+- `backend/app/ml/lenses/graph_model.py` - GAT definition + inference
+- `backend/app/ml/training/train_graph.py` - Training script
 - Convert NetworkX to PyG Data objects
 - 2-layer GAT with multi-head attention
-- `models/graph/gat_model.pt`, `models/graph/graph_config.json`, `models/graph/node_mapping.json`
+- `models/graph/gat_model.pt`, `models/graph/graph_config.json`, `models/graph/node_mapping.json`, `models/graph/node_embeddings.npy`
 
 ### 3. Entity Lens Model
 
@@ -458,14 +485,15 @@ Each of the 185 heuristics is tagged with one or more lenses it's relevant to. T
 **Inputs**:
 - Heuristic scores tagged "entity" (e.g. #96 self-transfer, #110 gas sponsorship distancing, #119 wallet cluster fragmentation, #135 airdrop farming/sybil, #141 exchange mule ring, #164 botnet orchestration)
 - Entity features: shared counterparty count, gas sponsor overlap, timing synchronization, device/IP overlap (when available)
-- Graph embeddings from Graph Lens
+- Graph embeddings from Graph Lens (dependency: Graph Lens must run first)
 
 **Outputs**: entity_score (float), cluster_id, cluster_risk_score
 
 Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score` with downgraded confidence and sets `entity_lens_mode=limited`.
 
 **Files**:
-- `backend/app/ml/lenses/entity_model.py`
+- `backend/app/ml/lenses/entity_model.py` - Model definition + inference
+- `backend/app/ml/training/train_entity.py` - Training script
 - `backend/app/services/clustering_service.py` - Louvain/Leiden + DBSCAN
 - `models/entity/entity_classifier.pkl`
 
@@ -483,7 +511,8 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Outputs**: temporal_score (float)
 
 **Files**:
-- `backend/app/ml/lenses/temporal_model.py` - LSTM definition, train, inference
+- `backend/app/ml/lenses/temporal_model.py` - LSTM definition + inference
+- `backend/app/ml/training/train_temporal.py` - Training script
 - `models/temporal/lstm_model.pt`
 
 ### 5. Document Lens Model
@@ -501,7 +530,8 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Outputs**: document_score (float)
 
 **Files**:
-- `backend/app/ml/lenses/document_model.py`
+- `backend/app/ml/lenses/document_model.py` - Model definition + inference
+- `backend/app/ml/training/train_document.py` - Training script
 - `models/document/document_classifier.pkl`
 
 ### 6. Off-ramp Lens Model
@@ -517,7 +547,8 @@ Fallback policy: if KYC/device/IP signals are missing, model emits `entity_score
 **Outputs**: offramp_score (float)
 
 **Files**:
-- `backend/app/ml/lenses/offramp_model.py`
+- `backend/app/ml/lenses/offramp_model.py` - Model definition + inference
+- `backend/app/ml/training/train_offramp.py` - Training script
 - `models/offramp/offramp_classifier.pkl`
 
 ### Lens-to-Typology Coverage Matrix
@@ -534,17 +565,119 @@ Each typology maps to one or more lenses. Examples:
 
 ---
 
+## Phase 7b: Model Training Strategy
+
+This section covers how every model in the pipeline is trained. Training is a prerequisite for inference (Phase 9) and must be completed before the system can score live data.
+
+### Training Data Preparation
+
+- **Primary dataset**: Elliptic Bitcoin Dataset (203,769 transactions, 234,355 edges, 49 time steps)
+- **Labeled subset**: Only the ~46,564 labeled records (illicit + licit) enter the supervised training set. The ~157,205 unknown records are excluded from supervised loss but are used for unsupervised components (autoencoder reconstruction, community detection, graph construction).
+- **Time-aware split**: Use Elliptic's built-in temporal structure to prevent future leakage:
+  - Training: time steps 1-34 (~70% of timeline)
+  - Validation: time steps 35-42 (~16% of timeline)
+  - Test: time steps 43-49 (~14% of timeline)
+- **No entity leakage**: Wallets that appear in both training and test windows must have their test-window labels masked during training. This is enforced in `ingest_service.py` during split generation.
+- **Feature computation on training data**: Heuristic scores are computed on training data using only information available at that time step. No future features may leak into the heuristic computation (e.g., "total lifetime volume" must be computed up to the current time step only).
+
+### Class Imbalance Handling
+
+AML data is severely imbalanced (~2.2% illicit in Elliptic, often <1% in production). Every supervised model must account for this:
+
+- **XGBoost models** (Behavioral, Document, Off-ramp, Meta): Set `scale_pos_weight = count(licit) / count(illicit)` to rebalance the loss function. On Elliptic training data, this is approximately 9:1 within labeled records. Alternatively, use `sample_weight` with inverse-frequency weights per class if per-cohort rebalancing is needed.
+- **GAT (Graph Lens)**: Use weighted cross-entropy loss with class weights inversely proportional to label frequency. If standard weighting under-performs on validation PR-AUC, apply focal loss (gamma=2, alpha=0.75) to further down-weight easy negatives.
+- **LSTM (Temporal Lens)**: Same weighted cross-entropy approach. Additionally, oversample illicit sequences during batch construction so each mini-batch contains at least ~20% positive examples, preventing gradient domination by the majority class.
+- **Autoencoder (Behavioral anomaly)**: Train exclusively on licit transactions. At inference, reconstruction error on illicit transactions will be systematically higher because the autoencoder has only learned to reconstruct normal behavior. This produces the anomaly score without needing class labels at inference time.
+- **Community detection (Entity Lens)**: Louvain/Leiden is unsupervised — no labels needed. The downstream entity classifier uses the same `scale_pos_weight` strategy as the other XGBoost models.
+- **Meta-model**: Same `scale_pos_weight` on the stacked features. Additionally, apply Platt scaling or isotonic calibration on the validation set so the final risk probabilities are well-calibrated (critical for threshold policies to work correctly across cohorts).
+
+### Per-Model Training Procedures
+
+**Behavioral Lens** (`backend/app/ml/training/train_behavioral.py`):
+1. Assemble input: transaction features + heuristic scores tagged "behavioral" + data availability flags
+2. XGBoost classifier: `scale_pos_weight`, `max_depth=6`, `learning_rate=0.05`, `n_estimators=500`, early stopping on validation PR-AUC (patience=50 rounds)
+3. Autoencoder: train on licit-only transactions. Architecture: 3-layer encoder (input_dim→128→64→32) and symmetric decoder (32→64→128→input_dim). MSE reconstruction loss. Adam optimizer lr=1e-3, 100 epochs, early stopping on validation reconstruction error (patience=15)
+4. Output artifacts: `xgboost_behavioral.pkl`, `autoencoder_behavioral.pt`
+
+**Graph Lens** (`backend/app/ml/training/train_graph.py`):
+1. Convert NetworkX graph to PyG Data object. Node feature vector = graph features + heuristic scores tagged "graph". Edge index from edge list.
+2. GAT: 2-layer GAT, 8 attention heads per layer, hidden_dim=64, dropout=0.3, weighted cross-entropy loss
+3. Train: Adam optimizer lr=5e-4, 200 epochs, early stopping on validation F1 (patience=30)
+4. After training, run a forward pass on all nodes and extract the penultimate-layer embeddings (before the classification head). Persist these as `node_embeddings.npy` for Entity Lens consumption.
+5. Output artifacts: `gat_model.pt`, `graph_config.json`, `node_mapping.json`, `node_embeddings.npy`
+
+**Entity Lens** (`backend/app/ml/training/train_entity.py`):
+1. Run Louvain/Leiden community detection on the full graph (unsupervised, uses all nodes including unknowns)
+2. Load graph embeddings from `node_embeddings.npy` (produced by Graph Lens training — dependency)
+3. Compute cluster-level features: cluster size, internal edge density, mean node embedding distance, shared counterparty count, timing synchronization score
+4. Run DBSCAN on graph embeddings (eps tuned on validation silhouette score) to identify dense suspicious clusters
+5. Train XGBoost entity classifier: cluster features + per-node heuristic scores tagged "entity" → binary risk label. A cluster is labeled suspicious if ≥ 30% of its labeled members are illicit (threshold tunable).
+6. Output artifacts: `entity_classifier.pkl`, `community_assignments.json`
+
+**Temporal Lens** (`backend/app/ml/training/train_temporal.py`):
+1. Build per-wallet ordered transaction sequences. Each time step in the sequence = (feature vector + heuristic scores tagged "temporal"). Pad/truncate to fixed length (50 most recent transactions per wallet).
+2. LSTM: 2-layer, hidden_dim=128, dropout=0.2, followed by a fully connected classification head (128→64→1, sigmoid)
+3. Train: Adam optimizer lr=1e-3, weighted cross-entropy with oversampled illicit sequences, 100 epochs, early stopping on validation PR-AUC (patience=20)
+4. Output artifacts: `lstm_model.pt`
+
+**Document Lens** (`backend/app/ml/training/train_document.py`):
+1. On Elliptic (no document data available): train in reduced mode using only heuristic scores tagged "document" + transaction metadata features. This lens will have minimal discriminative power on Elliptic — expected behavior.
+2. On custom CSV with document_events data: train XGBoost on metadata consistency scores, narrative complexity features, template repetition detection signals
+3. Output artifacts: `document_classifier.pkl`
+
+**Off-ramp Lens** (`backend/app/ml/training/train_offramp.py`):
+1. Assemble input: off-ramp features (proximity to tagged exchange/OTC addresses, exit concentration, conversion timing, inbound suspicious score) + heuristic scores tagged "offramp"
+2. XGBoost classifier with same hyperparameter strategy as Behavioral Lens
+3. Output artifacts: `offramp_classifier.pkl`
+
+**Meta-Model** (`backend/app/ml/training/train_meta.py`):
+1. Requires all 6 lens models to be trained first. Run inference on validation set to produce lens scores.
+2. Train on stacked features (see Phase 8 for full input spec)
+3. Apply calibration (Platt scaling or isotonic — choose whichever produces lower ECE on validation)
+4. Learn per-cohort thresholds and write to `threshold_config.json`
+5. Output artifacts: `meta_model.pkl`, `threshold_config.json`, `metrics_report.json`, `feature_importance.json`
+
+### Hyperparameter Tuning
+
+- Use Optuna with TPE sampler on the validation set (time steps 35-42). Budget: 50 trials per model for MVP.
+- Key search spaces per model:
+  - XGBoost (all): `max_depth` [4,8], `learning_rate` [0.01,0.1] log-uniform, `n_estimators` [200,1000], `min_child_weight` [1,10], `subsample` [0.7,1.0], `colsample_bytree` [0.6,1.0]
+  - GAT: `num_heads` {4,8}, `hidden_dim` {32,64,128}, `dropout` [0.1,0.5], `learning_rate` [1e-4,1e-3] log-uniform
+  - LSTM: `hidden_dim` {64,128,256}, `num_layers` {1,2,3}, `dropout` [0.1,0.4], `sequence_length` {20,50,100}
+  - Autoencoder: `latent_dim` {16,32,64}, `learning_rate` [1e-4,1e-3] log-uniform
+- **Primary tuning metric**: PR-AUC (preferred over ROC-AUC because ROC-AUC can be misleadingly optimistic on imbalanced data). **Secondary**: Precision@100 (top-100 analyst queue quality).
+- All tuning respects the time-aware split: validation data is strictly from future time steps relative to training.
+
+### Training Orchestration
+
+The `Makefile` target `make train` runs the full training pipeline in dependency order:
+
+1. `make features` — Feature engineering on training data (Phase 5)
+2. `make heuristics-train` — Heuristic scoring on training data (Phase 6)
+3. `make train-lenses-parallel` — Behavioral, Graph, Temporal, Document, Off-ramp (parallel, no inter-dependencies)
+4. `make train-entity` — Entity lens (after Graph lens completes, needs `node_embeddings.npy`)
+5. `make train-meta` — Meta-model (after all 6 lenses complete, needs lens scores on validation set)
+
+Each training script:
+- Logs all metrics (PR-AUC, F1, Precision@K, calibration error) to the `model_metrics` table
+- Saves model artifacts to the `models/` directory
+- Writes a training manifest (hyperparameters used, data split stats, runtime) to `models/artifacts/training_manifest.json`
+- Is idempotent: re-running overwrites previous artifacts only after validation gates pass
+
+---
+
 ## Phase 8: Meta-Model (Layer B)
 
-- `backend/app/ml/train_meta.py` - XGBoost meta-learner
+- `backend/app/ml/training/train_meta.py` - XGBoost meta-learner
   - Inputs (19 features):
     - 6 lens scores: behavioral_score, graph_score, entity_score, temporal_score, document_score, offramp_score
     - 1 anomaly signal: behavioral_anomaly_score
     - Heuristic aggregates: total_triggered_count, max_heuristic_confidence, behavioral_heuristic_mean, graph_heuristic_mean, entity_heuristic_mean, temporal_heuristic_mean, document_heuristic_mean, offramp_heuristic_mean
     - Applicability aggregates: applicable_rule_count, inapplicable_rule_count
     - Data availability flags: has_entity_intel, has_document_intel
+  - Class imbalance: use `scale_pos_weight` consistent with the training label distribution
   - Output: final risk probability + predicted label
-  - Calibration with Platt scaling or isotonic calibration (choose best on validation)
+  - Calibration with Platt scaling or isotonic calibration (choose best on validation by ECE)
   - Threshold policy learned per cohort (chain, asset, customer segment) and written to threshold policy artifact/table
   - Save artifacts:
     - `models/meta/meta_model.pkl` - trained meta-model
@@ -560,7 +693,7 @@ Each typology maps to one or more lenses. Examples:
   1. Load all models + heuristic registry
   2. Compute features for new data + data availability flags
   3. **Step 1**: Run all 185 heuristics -> produce heuristic vector, triggered list, explanations
-  4. **Step 2**: Run each lens model (heuristic outputs + lens features as input)
+  4. **Step 2**: Run lens models in dependency order: Behavioral, Graph, Temporal, Document, Off-ramp (parallel) then Entity (needs graph embeddings)
   5. **Step 3**: Stack lens outputs into meta-model
   6. **Step 4**: Apply threshold policy by cohort (`threshold_policies` table, fallback to artifact, final fallback env value)
   7. Output: transaction risk, wallet risk, cluster risk, full heuristic report, coverage tier, uncertainty flags
@@ -689,6 +822,7 @@ Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, and measurable t
 - `test_leakage.py` - Time-split integrity, no future feature leakage, no target leakage in engineered features
 - `test_eval_protocol.py` - Out-of-time and out-of-entity validation pipeline correctness
 - `test_drift_monitoring.py` - Drift detection and alerting path
+- `test_training.py` - Training scripts run end-to-end on small sample data, produce valid artifacts, respect dependency ordering
 
 ### Integration
 
@@ -707,22 +841,24 @@ Hackathon emphasis: Precision, Recall, F1, PR-AUC, Precision@K, and measurable t
 - **Charts**: Plotly.js via `react-plotly.js`
 - **Database**: Supabase PostgreSQL (existing project)
 - **Graph library**: NetworkX (Python) for construction, PyTorch Geometric for GAT
-- **ML stack**: XGBoost (behavioral + offramp + document + meta), PyTorch (GAT for graph lens, LSTM for temporal lens, Autoencoder for behavioral anomaly), scikit-learn (preprocessing)
+- **ML stack**: XGBoost (behavioral + offramp + document + meta), PyTorch (GAT for graph lens, LSTM for temporal lens, Autoencoder for behavioral anomaly), scikit-learn (preprocessing, calibration)
 - **Community detection**: python-louvain + leidenalg (entity lens)
+- **Hyperparameter tuning**: Optuna with TPE sampler, PR-AUC as primary metric
+- **Class imbalance**: scale_pos_weight (XGBoost), weighted cross-entropy (GAT/LSTM), licit-only training (autoencoder), focal loss fallback
 - **Heuristic engine**: 185 typology-specific rules from Money Laundering Typologies Atlas, extensible registry
 - **Explainability**: SHAP for XGBoost models, template-based for heuristics, lens contribution breakdown
 - **Detection target**: risk-ranked suspicious activity, not exhaustive laundering capture
 - **Threshold governance**: cohort-based threshold policies with explicit fallback chain and audit trail
 - **Validation protocol**: out-of-time + out-of-entity evaluation, typology-level scorecards, drift monitoring
-- **Dataset**: Elliptic Bitcoin Dataset + custom CSV support
+- **Dataset**: Elliptic Bitcoin Dataset (anonymized features, ~2% illicit, 49 time steps) + custom CSV support
 
 ---
 
 ## Complete File Manifest
 
-Total files to create: ~115+
+Total files to create: ~125+
 
-**Backend** (65+ files):
+**Backend** (75+ files):
 - `backend/app/`: main.py, config.py, supabase_client.py, dependencies.py
 - `backend/app/api/`: routes_ingest.py, routes_transactions.py, routes_wallets.py, routes_heuristics.py, routes_networks.py, routes_explanations.py, routes_reports.py, routes_metrics.py, routes_policies.py
 - `backend/app/schemas/`: transaction.py, wallet.py, heuristic.py, network_case.py, explanation.py, report.py, data_contract.py
@@ -730,9 +866,10 @@ Total files to create: ~115+
 - `backend/app/repositories/`: transactions_repo.py, wallets_repo.py, heuristics_repo.py, scores_repo.py, network_cases_repo.py, reports_repo.py
 - `backend/app/ml/heuristics/`: base.py, registry.py, runner.py, completeness.py, traditional.py, blockchain.py, hybrid.py, ai_enabled.py, common_red_flags.py
 - `backend/app/ml/lenses/`: behavioral_model.py, graph_model.py, entity_model.py, temporal_model.py, document_model.py, offramp_model.py
-- `backend/app/ml/`: train_meta.py, infer_pipeline.py, graph_features.py, transaction_features.py, subgraph_features.py, explainers.py
+- `backend/app/ml/training/`: train_behavioral.py, train_graph.py, train_entity.py, train_temporal.py, train_document.py, train_offramp.py, train_meta.py
+- `backend/app/ml/`: infer_pipeline.py, graph_features.py, transaction_features.py, subgraph_features.py, explainers.py
 - `backend/app/utils/`: logger.py, time_utils.py, graph_utils.py, file_utils.py, metrics.py
-- `backend/tests/`: test_ingest.py, test_features.py, test_graph.py, test_heuristics.py, test_scoring.py, test_api.py, test_lenses.py, test_data_contract.py, test_threshold_policy.py, test_leakage.py, test_eval_protocol.py, test_drift_monitoring.py
+- `backend/tests/`: test_ingest.py, test_features.py, test_graph.py, test_heuristics.py, test_scoring.py, test_api.py, test_lenses.py, test_data_contract.py, test_threshold_policy.py, test_leakage.py, test_eval_protocol.py, test_drift_monitoring.py, test_training.py
 - `backend/`: requirements.txt, Dockerfile, .env.example
 
 **Frontend** (30+ files):
