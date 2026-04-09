@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     network_hops: int = 3
 
     # When true, use CUDA (XGBoost + PyTorch) or MPS (PyTorch only) when available; else CPU
-    ml_use_gpu: bool = False
+    ml_use_gpu: bool = True
 
     openai_api_key: str = ""
     openai_base_url: str = ""

@@ -31,7 +31,7 @@ import torch
 
 from app.ml.entity_pickle_compat import ensure_entity_epoch_logger_on_main
 from app.ml.model_paths import MODELS_DIR
-from app.ml.ml_device import resolve_torch_device
+from app.ml.ml_device import resolve_torch_device, xgb_predict_proba
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -63,7 +63,7 @@ def _score_behavioral(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
     if xgb_path.exists():
         xgb_model = joblib.load(xgb_path)
-        beh_score = xgb_model.predict_proba(X)[:, 1].astype(np.float64)
+        beh_score = xgb_predict_proba(xgb_model, X)[:, 1].astype(np.float64)
         logger.info("Behavioral XGBoost scored %d rows", len(df))
 
     if ae_path.exists():
@@ -276,7 +276,7 @@ def _score_entity(df: pd.DataFrame) -> np.ndarray:
             X_cls = X_cls[feature_names]
         X_arr = X_cls.fillna(0).values.astype(np.float32)
         try:
-            probs = classifier.predict_proba(X_arr)[:, 1]
+            probs = xgb_predict_proba(classifier, X_arr)[:, 1]
             for cid, prob in zip(cids_ordered, probs):
                 cluster_scores[cid] = float(prob)
         except Exception as e:
@@ -383,7 +383,7 @@ def _score_offramp(df: pd.DataFrame) -> np.ndarray:
     ] if c in df.columns]
     X = df[cols].fillna(0).values.astype(np.float32) if cols else np.zeros((len(df), 1), dtype=np.float32)
     classifier = joblib.load(cls_path)
-    scores = classifier.predict_proba(X)[:, 1].astype(np.float64)
+    scores = xgb_predict_proba(classifier, X)[:, 1].astype(np.float64)
     logger.info("Off-ramp lens scored %d rows", len(df))
     return scores
 

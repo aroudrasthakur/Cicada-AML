@@ -1,8 +1,8 @@
-# Cicada AML
+# Aegis AML (Cicada AML)
 
-**AI-Powered Blockchain Anti-Money Laundering Platform**
+**AI-Powered Blockchain Anti-Money Laundering Platform** — repository root folder is typically `Aegis-AML`.
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB.svg)](https://react.dev/)
 [![Tailwind v4](https://img.shields.io/badge/Tailwind-4-06B6D4.svg)](https://tailwindcss.com/)
@@ -104,64 +104,95 @@ Cicada AML is a full-stack anti-money laundering detection system for blockchain
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | 3.10+ | 3.12 recommended |
-| Node.js | 18+ | LTS preferred |
-| Supabase | any | Free tier works; or self-hosted PostgreSQL |
-| RAM | 8 GB+ | 16 GB recommended if training models |
-| GPU | optional | CUDA 12.x or Apple MPS for faster training |
+| Python | 3.11+ | 3.12 / 3.13 work; use **python.org** or **py launcher** on Windows (avoid broken Store stubs) |
+| Node.js | 20+ | Matches Vite 6 / React 19 toolchain |
+| Supabase | any | Free tier works; Postgres + Auth + JWT for `/api/runs` |
+| RAM | 8 GB+ | 16 GB+ recommended for full Elliptic training |
+| GPU | optional | NVIDIA CUDA (see **GPU setup** below) or Apple **MPS** for PyTorch; XGBoost GPU needs a CUDA-capable wheel |
 
 ### 1. Clone
 
 ```bash
-git clone https://github.com/yourusername/cicada-aml.git
-cd cicada-aml
+git clone <your-fork-url> Aegis-AML
+cd Aegis-AML
 ```
 
 ### 2. Backend
 
+Create a virtualenv at the **repo root** (recommended so one Python is shared by `backend/` and `scripts/`):
+
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env       # then fill in Supabase credentials
+# Windows (PowerShell) — use py launcher if `python` is ambiguous
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -U pip
+pip install -r backend/requirements.txt
 ```
 
-**GPU note**: for NVIDIA CUDA, install PyTorch with the matching CUDA index *before* `pip install -r requirements.txt`:
+```bash
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r backend/requirements.txt
+```
+
+Copy env and add Supabase keys:
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+**GPU (NVIDIA)**: `backend/requirements.txt` installs **CPU PyTorch** by default. For CUDA (e.g. **RTX 50-series / Blackwell**, use **cu128** wheels — not cu124):
 
 ```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -r backend/requirements.txt
 ```
+
+Verify PyTorch sees CUDA:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Set `ML_USE_GPU=true` in `backend/.env` (it defaults to **on** in code; set `false` to force CPU).
 
 ### 3. Frontend
 
 ```bash
-cd ../frontend
+cd frontend
 npm install
-cp .env.example .env       # set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY
+cp .env.example .env
+# Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (same project as backend; use the anon key, not service role)
 ```
+
+Restart `npm run dev` after any change to `.env`.
 
 ### 4. Database Migrations
 
-Apply every `.sql` file in `supabase/migrations/` in order (`018_*` through `023_*`) via the Supabase SQL editor or `psql`.
+Apply **all** SQL files in `supabase/migrations/` in **numeric filename order** (`001_*.sql` … `026_*.sql`, etc.) via the Supabase SQL editor, Supabase CLI, or `psql`. Earlier migrations create core tables (`transactions`, `wallets`, …); `018+` add pipeline runs, RLS, and run-scoped reporting.
 
 ### 5. Run
 
-**Terminal 1** -- backend:
+Run uvicorn with **`backend/`** as the working directory so `app` package imports resolve. Trained artifacts are loaded from **`models/`** at the **repository root** (`app.ml.model_paths`), not relative to cwd.
+
+**Terminal 1 — backend**
 
 ```bash
 cd backend
-uvicorn app.main:app --reload --port 8000
+# If using repo-root venv: activate it first, then:
+python -m uvicorn app.main:app --reload --reload-dir app --host 0.0.0.0 --port 8000
 ```
 
-**Terminal 2** -- frontend:
+**Terminal 2 — frontend**
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open **http://localhost:5173**. The Vite dev server proxies `/api` to the backend.
+Open **http://localhost:5173**. Vite proxies **`/api`** to **`http://127.0.0.1:8000`** (see `frontend/vite.config.ts`; override with `VITE_API_PROXY_TARGET` if needed).
 
 ### 6. Auth Setup
 
@@ -181,37 +212,41 @@ In Supabase **Authentication > URL Configuration**, add these redirect URLs:
 | `SUPABASE_URL` | yes | Supabase project URL |
 | `SUPABASE_KEY` | yes | Supabase anon/public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | yes | Service role key (server-side only) |
-| `SUPABASE_JWT_SECRET` | no | Only for legacy HS256 tokens |
-| `FALLBACK_RISK_THRESHOLD` | no | Default decision threshold when no trained model exists (default `0.75`) |
-| `ML_USE_GPU` | no | `true` to enable CUDA/MPS (default `false`) |
+| `SUPABASE_JWT_SECRET` | no | HS256 JWT verification fallback (optional if using JWKS) |
+| `FALLBACK_RISK_THRESHOLD` | no | Default decision threshold when no trained policy exists (default `0.75`) |
+| `ML_USE_GPU` | no | `true` (default) uses **CUDA** (PyTorch + XGBoost when available) or **MPS** (Apple, PyTorch only); set `false` to force CPU |
 | `OPENAI_API_KEY` | no | Enables LLM-generated report summaries; falls back to deterministic narrative |
 | `OPENAI_MODEL` | no | Model name (default `gpt-4o-mini`) |
 | `OPENAI_BASE_URL` | no | Override for Azure OpenAI or compatible endpoints |
 
-Model paths default to `models/` at the repo root and rarely need overriding.
+Model paths default to `models/` at the **repo root** (`app.ml.model_paths.MODELS_DIR`); override via `MODEL_DIR` / `*_MODEL_PATH` if needed.
 
-### Frontend (`frontend/.env`)
+### Frontend (`frontend/.env` or `frontend/.env.local`)
+
+Vite loads env from the `frontend/` directory (`envDir` in `vite.config.ts`). Use **`.env.local`** for secrets (gitignored).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `VITE_SUPABASE_URL` | yes | Same project URL |
-| `VITE_SUPABASE_ANON_KEY` | yes | Same anon key |
-| `VITE_API_PROXY_TARGET` | no | Override backend URL for dev proxy (default `http://127.0.0.1:8000`) |
+| `VITE_SUPABASE_URL` | yes | Same project URL as backend |
+| `VITE_SUPABASE_ANON_KEY` | yes | **Anon** key (never the service role key) |
+| `VITE_API_PROXY_TARGET` | no | Backend URL for the dev proxy (default `http://127.0.0.1:8000`) |
+
+If `VITE_SUPABASE_*` are missing, the app falls back to placeholder values and login requests show `Apikey: invalid` in the browser network tab.
 
 ---
 
 ## Database Migrations
 
-Migrations live in `supabase/migrations/` and must be applied in filename order:
+Migrations live in `supabase/migrations/`. Apply them in **strict numeric order** (`001_…` through `026_…` and any newer files). Highlights:
 
-| Migration | Purpose |
-|-----------|---------|
-| `018_create_pipeline_runs.sql` | Core tables: `pipeline_runs`, `run_transactions`, `run_scores`, `run_suspicious_txns`, `run_clusters`, `run_cluster_members`, `run_reports`, `run_graph_snapshots` |
-| `019_pipeline_runs_user_scoping.sql` | Adds `user_id` FK, enables RLS on all run tables |
-| `020_add_report_summaries.sql` | `summary_text`, `summary_model`, `summary_generated_at` on `run_reports`; `report_ai_summaries` polymorphic table |
-| `021_pipeline_runs_progress.sql` | `current_step`, `progress_log`, `scoring_tx_done`, `scoring_tx_total`, `lenses_completed` |
-| `022_run_scores_heuristic_triggered_count.sql` | `heuristic_triggered_count` integer column |
-| `023_run_scores_heuristic_explanations.sql` | `heuristic_explanations` JSONB column |
+| Range | Purpose |
+|-------|---------|
+| `001`–`015` | Core AML schema: transactions, wallets, edges, scores, heuristics, network cases, reports, intel, RLS prep |
+| `016`–`017` | Schema hardening, auth profiles |
+| `018`–`023` | **Pipeline runs**: run-scoped tables, user scoping, progress, heuristic columns, SAR linkage |
+| `024`–`026` | SAR reports and FK relaxations for reporting workflows |
+
+Use the Supabase dashboard SQL editor, `supabase db push`, or `psql` against your project.
 
 ---
 
@@ -236,8 +271,18 @@ The pipeline persists every intermediate result to Supabase, so the dashboard is
 Pre-configured for the [Elliptic Bitcoin Dataset](https://www.kaggle.com/datasets/ellipticco/elliptic-data-set) (203,769 transactions, 234,355 edges):
 
 ```bash
-curl -X POST http://localhost:8000/api/ingest/elliptic
+# bash / Git Bash
+curl -X POST "http://localhost:8000/api/ingest/elliptic"
 ```
+
+```powershell
+# Windows PowerShell (curl is Invoke-WebRequest — use curl.exe)
+curl.exe -X POST "http://localhost:8000/api/ingest/elliptic"
+```
+
+Place Elliptic CSVs under **`data/external/`** at the **repository root**. The ingest handler defaults to `data_dir=data/external` **relative to the server process working directory**. If you start uvicorn with **`cd backend`**, either run from the repo root with `python -m uvicorn ...` and cwd at root, or call:
+
+`POST http://localhost:8000/api/ingest/elliptic?data_dir=../data/external`
 
 ### Custom CSV Upload
 
@@ -283,31 +328,51 @@ Platt sigmoid calibration is applied to the meta-learner so scores are interpret
 
 ## Training Pipeline
 
+**Recommended — full pipeline from Elliptic CSVs** (from **repository root**, with `.venv` activated):
+
 ```bash
-cd backend
-
-# 1. Prepare features
-python -m scripts.prepare_features --output data/processed
-
-# 2. Train lenses (any order; entity needs graph embeddings)
-python -m app.ml.training.train_behavioral --data-dir data/processed
-python -m app.ml.training.train_graph --data-dir data/processed
-python -m app.ml.training.train_temporal --data-dir data/processed
-python -m app.ml.training.train_offramp --data-dir data/processed
-python -m app.ml.training.train_entity --data-dir data/processed
-
-# 3. Prepare meta features (stacked lens + heuristic outputs)
-python -m scripts.prepare_meta_features
-
-# 4. Train meta-learner
-python -m app.ml.training.train_meta --data-dir data/processed
+python scripts/train_all_models.py
 ```
 
-- Optuna-based hyperparameter search (50 trials, TPE sampler).
-- Primary metric: **PR-AUC** (robust to class imbalance). Secondary: **Precision@100** (analyst queue quality).
-- Time-aware splits prevent future leakage.
+This runs, in order: `scripts.prepare_features` (Elliptic under `data/external/` → `data/processed/`) → parallel lens trainers (behavioral, graph, temporal, off-ramp) → `train_entity` → `scripts.score_training_data` → `scripts.prepare_meta_features` → `train_meta`. Artifacts are written to **`models/`** at the repo root.
 
-Trained artifacts are saved under `models/` and loaded automatically at server startup.
+Options:
+
+```bash
+python scripts/train_all_models.py --skip-features   # reuse existing data/processed
+python scripts/train_all_models.py --input /path/to/elliptic_csvs
+```
+
+**Makefile** (Unix shell with `make`; on Windows use Git Bash or run the underlying commands):
+
+| Target | Purpose |
+|--------|---------|
+| `make train` / `make train-all` | Same as `python scripts/train_all_models.py` |
+| `make features` | `prepare_features` only |
+| `make train-lenses-parallel` | Four lenses in parallel (bash `&` / `wait`) |
+| `make train-entity` | Entity lens after graph embeddings exist |
+| `make score-training-data` | Score `train_features.csv` with all trained lenses |
+| `make prepare-meta-features` | Build `meta_features.csv` |
+| `make train-meta` | Train meta-learner |
+
+**Manual steps** (from `backend/`, paths relative to repo):
+
+```bash
+cd backend
+python -m scripts.prepare_features --input ../data/external --output ../data/processed
+python -m app.ml.training.train_graph --data-dir ../data/processed
+python -m app.ml.training.train_behavioral --data-dir ../data/processed
+python -m app.ml.training.train_temporal --data-dir ../data/processed
+python -m app.ml.training.train_offramp --data-dir ../data/processed
+python -m app.ml.training.train_entity --data-dir ../data/processed
+python -m scripts.score_training_data --data-dir ../data/processed
+python -m scripts.prepare_meta_features --data-dir ../data/processed
+python -m app.ml.training.train_meta --data-dir ../data/processed
+```
+
+**Faster iteration**: `make subset-processed` produces `data/processed_subset/` for quicker training loops.
+
+Training scripts use **Optuna** where configured, emphasize **PR-AUC** under imbalance, and time-aware splits where applicable. Trained weights under `models/` are picked up by the API and pipeline at runtime.
 
 ---
 
@@ -359,7 +424,7 @@ All endpoints are prefixed with `/api`. Authentication is via Supabase JWT in th
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/ingest/csv` | Upload CSV for legacy scoring path |
-| `POST` | `/ingest/elliptic` | Load Elliptic Bitcoin dataset |
+| `POST` | `/ingest/elliptic` | Load Elliptic Bitcoin dataset (`?data_dir=` path to CSV folder; default `data/external`) |
 
 ### Transactions (`/api/transactions`)
 
@@ -408,7 +473,9 @@ All endpoints are prefixed with `/api`. Authentication is via Supabase JWT in th
 | `GET` | `/reports` | List reports |
 | `POST` | `/reports/generate/{case_id}` | Generate case report |
 | `GET` | `/reports/{report_id}` | Report detail |
-| `GET` | `/reports/{report_id}/download` | Download report |
+| `GET` | `/reports/{report_id}/download` | Download report file |
+| `POST` | `/reports/{report_id}/generate-sar` | Generate SAR PDF from a report |
+| `GET` | `/reports/sar/{sar_id}/download` | Download generated SAR PDF |
 
 ### Metrics and Policies (`/api/metrics`, `/api/policies`)
 
@@ -430,20 +497,31 @@ All endpoints are prefixed with `/api`. Authentication is via Supabase JWT in th
 
 ## Testing
 
+From the repo root (or `backend/`), run the full suite the same way CI does:
+
 ```bash
 cd backend
-pytest                                  # all tests
-pytest tests/test_heuristics.py         # 185-heuristic engine
-pytest tests/test_lenses.py             # ML lens models
-pytest tests/test_scoring.py            # end-to-end pipeline
-pytest tests/test_enriched_suspicious.py # enrichment + heuristic labels
-pytest tests/test_summary_service.py    # AI summary generation
-pytest tests/test_leakage.py            # data leakage checks
-pytest tests/test_drift_monitoring.py   # drift detection
-pytest tests/test_threshold_policy.py   # threshold policies
-pytest tests/test_typology_taxonomy.py  # typology mapping
-pytest tests/test_audit_observability.py # observability instrumentation
+python -m pytest tests/ -v
 ```
+
+Selected modules (examples):
+
+```bash
+python -m pytest tests/test_heuristics.py -v
+python -m pytest tests/test_lenses.py -v
+python -m pytest tests/test_scoring.py -v
+python -m pytest tests/test_enriched_suspicious.py -v
+python -m pytest tests/test_summary_service.py -v
+python -m pytest tests/test_leakage.py -v
+python -m pytest tests/test_drift_monitoring.py -v
+python -m pytest tests/test_threshold_policy.py -v
+python -m pytest tests/test_typology_taxonomy.py -v
+python -m pytest tests/test_audit_observability.py -v
+```
+
+SAR PDF and API flows have multiple modules named `tests/test_sar_*.py`; run the full `tests/` tree or invoke those paths explicitly (shell globs differ on Windows vs. bash).
+
+There are **30** `test_*.py` modules under `backend/tests/` (heuristics, lenses, scoring, SAR pipeline, API, drift, etc.).
 
 Frontend type checks:
 
@@ -458,7 +536,9 @@ npm run lint
 ## Project Structure
 
 ```
-cicada-aml/
+Aegis-AML/   # clone directory name may vary
+├── scripts/
+│   └── train_all_models.py        # Full ML pipeline (features → lenses → score → meta)
 ├── backend/
 │   ├── app/
 │   │   ├── api/                    # FastAPI route modules
@@ -507,8 +587,8 @@ cicada-aml/
 │   │   ├── config.py               # Settings (pydantic-settings)
 │   │   ├── main.py                 # FastAPI app + router registration
 │   │   └── supabase_client.py
-│   ├── scripts/                    # Data prep and meta-feature generation
-│   ├── tests/                      # 18 test modules + conftest
+│   ├── scripts/                    # prepare_features, score_training_data, prepare_meta_features, subset_processed_data
+│   ├── tests/                      # pytest modules + conftest
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -529,7 +609,7 @@ cicada-aml/
 │   ├── meta/
 │   └── artifacts/                  # threshold_config.json, feature_names.pkl
 ├── supabase/
-│   └── migrations/                 # 018-023 SQL migrations
+│   └── migrations/                 # Ordered SQL (001 … 026; see [Database Migrations](#database-migrations))
 ├── data/                           # Raw/processed datasets (gitignored)
 ├── docs/                           # Lens reports, pipeline audit
 └── README.md
@@ -629,7 +709,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 - [ ] Real-time streaming inference via WebSocket
 - [ ] Multi-chain support (Ethereum, Solana, Tron)
 - [ ] Federated learning for privacy-preserving cross-institution training
-- [ ] SAR (Suspicious Activity Report) PDF/DOCX export
+- [x] SAR (Suspicious Activity Report) PDF generation and download (`/api/reports/.../generate-sar`)
 - [ ] Blockchain explorer API integration for live enrichment
 - [ ] Webhook / Slack alerts on high-risk detections
 - [ ] Role-based access control (analyst vs. supervisor views)
